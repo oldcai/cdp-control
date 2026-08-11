@@ -81,9 +81,43 @@ function prune(n: ViewNode): boolean {
   const hasView = !!n.inView || n.kids.length > 0;
   if (!n.inView) {
     n.text = ''; n.leafValue = undefined; n.imgAlt = ''; n.ref = undefined; n.agg = false;
-    n.isContent = false; n.inputInfo = undefined;
+    n.isContent = false; n.inputInfo = undefined; n.state = undefined;
   }
   return hasView;
+}
+
+const STATE_ORDER = ['pressed', 'checked', 'expanded', 'selected', 'disabled', 'open'] as const;
+type StateName = typeof STATE_ORDER[number];
+type DisabledFormElement = HTMLButtonElement | HTMLFieldSetElement | HTMLInputElement | HTMLOptGroupElement
+  | HTMLOptionElement | HTMLSelectElement | HTMLTextAreaElement;
+const DISABLED_FORM_TAGS = new Set(['BUTTON', 'FIELDSET', 'INPUT', 'OPTGROUP', 'OPTION', 'SELECT', 'TEXTAREA']);
+
+/** 从 ARIA 与原生 DOM property 采语义状态；mixed 优先于同名 true，最终按固定顺序输出且不重复。 */
+function elementState(el: Element): string[] {
+  const values = new Map<StateName, true | 'mixed'>();
+  const put = (name: StateName, value: true | 'mixed') => {
+    if (value === 'mixed' || !values.has(name)) values.set(name, value);
+  };
+  const aria: [string, StateName][] = [
+    ['aria-pressed', 'pressed'],
+    ['aria-checked', 'checked'],
+    ['aria-expanded', 'expanded'],
+    ['aria-selected', 'selected'],
+    ['aria-disabled', 'disabled'],
+  ];
+  for (const [attr, name] of aria) {
+    const value = (el.getAttribute(attr) || '').trim().toLowerCase();
+    if (value === 'true') put(name, true);
+    else if (value === 'mixed') put(name, 'mixed');
+  }
+  if (el.tagName === 'INPUT' && (el as HTMLInputElement).checked) put('checked', true);
+  if (DISABLED_FORM_TAGS.has(el.tagName) && (el as DisabledFormElement).disabled) put('disabled', true);
+  if (el.tagName === 'DETAILS' && (el as HTMLDetailsElement).open) put('open', true);
+  if (el.tagName === 'OPTION' && (el as HTMLOptionElement).selected) put('selected', true);
+  return STATE_ORDER.flatMap(name => {
+    const value = values.get(name);
+    return value ? [value === 'mixed' ? `${name}=mixed` : name] : [];
+  });
 }
 
 /** 交互元素的语义标签:aria-label → title → data-tooltip → 直接文本。
@@ -101,7 +135,7 @@ export const elLabel = (el: Element): string => {
 };
 
 /** 从 root 建精简树。opts.visibleOnly:建视图后按视口可见裁剪(沿用 view --visible-only 语义);
- * opts.viewport:对带 ref 的节点算 node.view(输出 [ref=i, visible] 标记),见 lib/view-format.ts。
+ * opts.viewport:对带 ref 的节点算 node.view(输出 [ref=i·屏] 标记),见 lib/view-format.ts。
  *
  * ref 两遍先序登记:遍一(simplify)建树 + 打标记(wantRef/wantHidden)+ 暂存 el,**不登记 __cdpRefs**;
  * 遍二(assign)按先序 DFS 复用或追加 ref；输出仍按树序，但复用后的数字不保证单调。
@@ -198,6 +232,7 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
   // —— 遍一:建树 + 打标记 + 暂存 el。不登记 __cdpRefs ——
   function simplify(el: Element | ShadowRoot, depth: number): ViewNode | null {
     const isEl = el instanceof Element;
+    const state = isEl ? elementState(el as Element) : [];
     // 折叠(非根元素命中 fold 规则):标 wantRef(可展开)、设 fold=备注、不递归子树。
     // 根不折叠:view <ref> 展开折叠容器时,根本身(=该容器)不该再被折叠,否则永远展不开。
     if (isEl && depth > 0) {
@@ -207,6 +242,7 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
         return {
           tag: e.tagName.toLowerCase(), isContent: true, text: '', inter: false, ref: undefined,
           wantRef: true, el: e, inView: true, view: viewport ? isInViewport(e) : undefined, imgAlt: '',
+          state: state.length ? state : undefined,
           shadow: !!e.shadowRoot, kids: [], size: 1, hasText: false, agg: false, fold: note,
           foldSize: countEls(e),
         };
@@ -234,9 +270,9 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
       tag,
       // shadow host 强制 isContent:空壳 host(无文本、shadow 子树也未加载)也要被 walk 到、输出占位,
       // 否则会被 productive 过滤掉,agent 在整页 view 里看不到它存在。
-      isContent: !!text || (isEl && el.tagName === 'IMG') || effInter || hasShadow,
+      isContent: !!text || (isEl && el.tagName === 'IMG') || effInter || hasShadow || state.length > 0,
       text, inter: effInter, ref: undefined, inView, view: viewport ? isInViewport(el as Element) : undefined,
-      wantRef: isEl && inView && (effInter || !!text || hasShadow) ? true : undefined,
+      wantRef: isEl && inView && (effInter || !!text || hasShadow || state.length > 0) ? true : undefined,
       // 纯文本段(span 直接文本)或命中黑名单的 a → 可与相邻文本段合并
       mergeable: (ignoredA || (tag === 'span' && !!text && !effInter && !hasShadow)) ? true : undefined,
       el: isEl ? el as Element : undefined,
@@ -246,10 +282,11 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
       inputInfo: isEl && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')
         ? {
             type: el.tagName === 'INPUT' ? (el.getAttribute('type') || 'text') : undefined,
-            value: cut(((el as any).value || ''), opts.maxLen),
+            value: cut(((el as HTMLInputElement | HTMLTextAreaElement).value || ''), opts.maxLen),
             placeholder: el.getAttribute('placeholder') || undefined,
           }
         : undefined,
+      state: state.length ? state : undefined,
       // 宿主带 shadowRoot:其下的子节点展平自 shadow DOM,CSS 选择器无法穿透,须用 ref 定位
       shadow: hasShadow,
       kids: [], size: 0, hasText: false, agg: false,
@@ -299,7 +336,7 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
       text = cut(strip(grabText(el, 0)), opts.maxLen); node.agg = true;
     }
     node.text = text;
-    node.isContent = !!text || (isEl && el.tagName === 'IMG') || effInter || hasShadow;
+    node.isContent = !!text || (isEl && el.tagName === 'IMG') || effInter || hasShadow || state.length > 0;
     node.size = 1 + node.kids.reduce((a, k) => a + k.size, 0);
     if (!text && title && !node.kids.some(k => k.text) && node.size <= 8 && (el as Element).tagName !== 'SVG' && (el as Element).tagName !== 'path' && (el as Element).tagName !== 'USE') {
       node.leafValue = cut(strip(title), opts.maxLen);
@@ -308,7 +345,7 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
     // 隐藏容器:纯包装元素(无自身文本/交互/shadow/表单),但子树含内容(叶子路径上的祖父 div)。
     // 标 wantHidden(遍二登记进 __cdpRefs,可被 view <ref>/fold/locate/info 定位),**不设 node.ref** ——
     // formatView 不输出其 [ref=N],view 默认不显示、内联折叠行为不变。parentRef 由遍二用最近已登记祖先填。
-    if (isEl && inView && !effInter && !text && !hasShadow && !node.inputInfo
+    if (isEl && inView && !effInter && !text && !hasShadow && !node.inputInfo && !node.state?.length
         && node.kids.length > 0 && subtreeHasContent(node)) {
       node.wantHidden = true;
       node.hidden = true;

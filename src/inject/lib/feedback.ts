@@ -1,8 +1,8 @@
 /**
  * feedback.ts — 操作后自动反馈(注入侧):MutationObserver 采集本次操作产生的 DOM 变化。
  * 分为两段,跨两次 Runtime.evaluate 调用协作,observer 状态暂存于全局 __cdpFeedback:
- *   startFeedback()   — 装 observer,记录 childList 新增 + 文本变化(前后值)。
- *   collectFeedback() — 断开 observer,取"顶层新增元素"逐块建视图拼接,产摘要。
+ *   startFeedback()   — 装 observer,记录 childList 新增 + 文本/白名单属性变化(前后值)。
+ *   collectFeedback() — 断开 observer,取"顶层新增元素"逐块建视图拼接,产摘要与属性差集。
  * 等待时长由 Node 侧(sleep)控制,不在此注入侧;node 侧在两次调用之间等待 delayMs。
  *
  * ref 语义:collect **不重置 __cdpRefs**——已登记元素复用旧号,首次见到的反馈元素从表尾追加,不顶掉整页旧 ref
@@ -15,12 +15,17 @@
  * 噪声过滤:video/audio/canvas 子树(弹幕/播放进度/缓冲在 video 或其 shadow 内)整体跳过;
  * 连续播放时间戳(01:55→01:56…)折叠为一条。点赞数等纯数字真变化不折叠,保留为真信号。
  */
-import { buildView } from './view-core.ts';
+import { buildView, elLabel, strip } from './view-core.ts';
 import { markText, formatView } from './view-format.ts';
+import { refOf } from './probe.ts';
+import { cut } from './view-utils.ts';
 
 export interface FeedbackResult {
   blocks: FeedbackBlock[];
   changes: FeedbackChange[];
+  attrs: FeedbackAttr[];
+  /** 去重后的属性变化超过 20 条时，只返回前 20 条；此字段供 Node 侧打印剩余条数。 */
+  attrsOverflow: number;
   /** 是否发生了整页重载(document 换成新对象)。锚点/历史跳转(URL 变但同 document)为 false;
    * 整页导航为 true——此时旧 DOM/ref 全失效,增量采集无意义。Node 侧据此决定是否整页 view 重建。 */
   reloaded: boolean;
@@ -32,13 +37,72 @@ export interface FeedbackBlock { lines: string[]; count: number }
 /** 一次文本变化:before 为旧值(可缺),after 为新值;note 给折叠摘要用(如"播放进度,已折叠 N 条")。 */
 export interface FeedbackChange { before?: string; after: string; note?: string }
 
-interface FeedbackState { added: Node[]; changes: FeedbackChange[]; document: Document }
+/** 一次白名单属性变化。class 的 before/after 分别只含移除/新增 token；其他属性保留原值(null=不存在)。 */
+export interface FeedbackAttr { desc: string; attr: string; before: string | null; after: string | null }
+
+interface PendingFeedbackAttr { el: Element; attr: string; before: string | null; after: string | null }
+interface FeedbackState { added: Node[]; changes: FeedbackChange[]; attrs: PendingFeedbackAttr[]; document: Document }
 
 /** shadow 递归观察深度上限(防极深 shadow 树导致 observer 爆炸;B站等典型页面 shadow 嵌套 ≤3)。 */
 const MAX_SHADOW_DEPTH = 3;
 
 /** 子树黑名单:这些标签的子树内的所有变化都不进反馈(弹幕/播放进度/缓冲/canvas 动画都在这)。 */
 const IGNORE_SUBTREE_OF = ['VIDEO', 'AUDIO', 'CANVAS'];
+
+/** 属性反馈白名单：仅语义状态、对应原生布尔属性与 class；其他高频属性一律不观察输出。 */
+const FEEDBACK_ATTR_LIST = [
+  'aria-pressed', 'aria-checked', 'aria-expanded', 'aria-selected', 'aria-disabled',
+  'checked', 'disabled', 'open', 'selected', 'class',
+] as const;
+const FEEDBACK_ATTRS = new Set<string>(FEEDBACK_ATTR_LIST);
+
+const classTokens = (value: string | null): string[] => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const token of (value || '').split(/\s+/).filter(Boolean)) {
+    if (seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+  }
+  return out;
+};
+
+/** class token 差集：added 按 after 顺序、removed 按 before 顺序；重排/重复/空白不构成变化。 */
+export function diffClassTokens(before: string | null, after: string | null): { added: string[]; removed: string[] } {
+  const oldTokens = classTokens(before);
+  const newTokens = classTokens(after);
+  const oldSet = new Set(oldTokens);
+  const newSet = new Set(newTokens);
+  return {
+    added: newTokens.filter(token => !oldSet.has(token)),
+    removed: oldTokens.filter(token => !newSet.has(token)),
+  };
+}
+
+/** 属性条目按最终呈现去重并限量；overflow 是去重后未返回的条目数。 */
+export function limitFeedbackAttrs(input: FeedbackAttr[], max = 20): { attrs: FeedbackAttr[]; overflow: number } {
+  const seen = new Set<string>();
+  const unique: FeedbackAttr[] = [];
+  for (const item of input) {
+    const key = JSON.stringify([item.desc, item.attr, item.before, item.after]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+  const limit = Math.max(0, max);
+  return { attrs: unique.slice(0, limit), overflow: Math.max(0, unique.length - limit) };
+}
+
+/** 元素紧凑描述：复用 view 的语义标签；已建树元素只反查 ref、不现场注册。 */
+function describeElement(el: Element): string {
+  let desc = el.tagName.toLowerCase();
+  if (el.id) desc += '#' + el.id;
+  const label = cut(strip(elLabel(el)), 40);
+  if (label) desc += ' "' + label.replace(/"/g, '\\"') + '"';
+  const ref = refOf(el);
+  if (ref != null) desc += ' [ref=' + ref + ']';
+  return desc;
+}
 
 /** 取 mutation 里新增/移除的直接文本节点文本。 */
 const textNodes = (nodes: NodeList): string[] =>
@@ -61,13 +125,13 @@ function inIgnoredSubtree(node: Node): boolean {
 
 /**
  * 启动反馈观察:对 document 及其所有 shadowRoot(限深度 ≤3)各起一个 MutationObserver,
- * 记录 childList 新增节点与文本变化(前后值;attributes 不进反馈,噪声大)。
+ * 记录 childList 新增节点、文本变化与白名单属性变化(前后值)。
  * childList 新增节点若带 shadowRoot,补装 observer,覆盖运行时挂载的 shadow host。
  * video/audio/canvas 子树内的变化整体跳过(弹幕/播放进度噪声)。
  */
 export function startFeedback(): void {
   if ((globalThis as any).__cdpFeedback) return; // 已启动则复用(防重复装)
-  const st: FeedbackState = { added: [], changes: [], document };
+  const st: FeedbackState = { added: [], changes: [], attrs: [], document };
   const mos: MutationObserver[] = [];
   // callback 在所有 observer 间共享:统一推 state,并给新增带 shadowRoot 的节点补装。
   const onMutate = (ms: MutationRecord[]) => {
@@ -93,6 +157,15 @@ export function startFeedback(): void {
             observeShadowTree(n as Element, currentDepth(m.target));
           }
         }
+      } else if (m.type === 'attributes' && m.attributeName && FEEDBACK_ATTRS.has(m.attributeName)) {
+        const target = m.target;
+        if (!(target instanceof Element)) continue;
+        st.attrs.push({
+          el: target,
+          attr: m.attributeName,
+          before: m.oldValue,
+          after: target.getAttribute(m.attributeName),
+        });
       }
     }
   };
@@ -116,7 +189,10 @@ export function startFeedback(): void {
   // 递归为 root 及其内所有 shadowRoot 装 observer;depth 为 root 本身的 shadow 深度(document=0)。
   function observeAll(root: Node, depth: number): void {
     const mo = new MutationObserver(onMutate);
-    mo.observe(root, { childList: true, subtree: true, characterData: true, characterDataOldValue: true });
+    mo.observe(root, {
+      childList: true, subtree: true, characterData: true, characterDataOldValue: true,
+      attributes: true, attributeOldValue: true, attributeFilter: [...FEEDBACK_ATTR_LIST],
+    });
     mos.push(mo);
     depthMap.set(root, depth);
     if (depth >= MAX_SHADOW_DEPTH) return; // 超深度不再下钻
@@ -148,10 +224,10 @@ export function startFeedback(): void {
 /** 收尾反馈:断开 observer,把本次新增内容去重折叠 + 文本变化过滤,返回结构化结果。 */
 export function collectFeedback(opts: { viewport?: boolean } = {}): FeedbackResult {
   const fb = (globalThis as any).__cdpFeedback;
-  if (!fb) return { blocks: [], changes: [], reloaded: false };
+  if (!fb) return { blocks: [], changes: [], attrs: [], attrsOverflow: 0, reloaded: false };
   for (const mo of fb.mos as MutationObserver[]) mo.disconnect();
   (globalThis as any).__cdpFeedback = null;
-  const { added, changes } = fb.state as FeedbackState;
+  const { added, changes, attrs: pendingAttrs } = fb.state as FeedbackState;
   // 整页重载判定:装 observer 时(document)与采集时(document)是否同一对象。
   // 锚点/历史跳转 URL 变但 document 不变 → reloaded=false(ref 仍有效);整页导航换 document → true。
   const reloaded = (fb.state as FeedbackState).document !== document;
@@ -170,7 +246,10 @@ export function collectFeedback(opts: { viewport?: boolean } = {}): FeedbackResu
     const blines = formatView(t);
     if (!blines.length) continue;
     // 折叠签名去掉 ref 号(内容相同但 ref 不同的重复块应视为同一条,如重复广告)。
-    const sig = blines.join('\n').replace(/\[ref=\d+(, visible)?\]/g, '');
+    const sig = blines.join('\n').replace(
+      /\[ref=\d+(?:·屏)?(?: ([^\]]+))?\]/g,
+      (_match: string, states: string | undefined) => states ? `[${states}]` : '',
+    );
     if (seen.has(sig)) { seen.get(sig)!.count++; }
     else { seen.set(sig, { lines: blines, count: 1 }); order.push(sig); }
   }
@@ -187,7 +266,36 @@ export function collectFeedback(opts: { viewport?: boolean } = {}): FeedbackResu
     deduped.push(c);
   }
   const real = foldTimestampRun(deduped).slice(0, 5);
-  return { blocks, changes: real, reloaded };
+
+  // 同一元素+属性的多次 mutation 合成首个 before → 最终 after，去掉批处理内的中间态。
+  const merged = new Map<Element, Map<string, PendingFeedbackAttr>>();
+  for (const item of pendingAttrs) {
+    let byAttr = merged.get(item.el);
+    if (!byAttr) { byAttr = new Map(); merged.set(item.el, byAttr); }
+    const current = byAttr.get(item.attr);
+    if (current) current.after = item.after;
+    else byAttr.set(item.attr, { ...item });
+  }
+  const attrItems: FeedbackAttr[] = [];
+  for (const byAttr of merged.values()) {
+    for (const item of byAttr.values()) {
+      if (item.attr === 'class') {
+        const delta = diffClassTokens(item.before, item.after);
+        if (!delta.added.length && !delta.removed.length) continue;
+        attrItems.push({
+          desc: describeElement(item.el), attr: item.attr,
+          before: delta.removed.join(' '), after: delta.added.join(' '),
+        });
+      } else if (item.before !== item.after) {
+        attrItems.push({
+          desc: describeElement(item.el), attr: item.attr,
+          before: item.before, after: item.after,
+        });
+      }
+    }
+  }
+  const limitedAttrs = limitFeedbackAttrs(attrItems);
+  return { blocks, changes: real, attrs: limitedAttrs.attrs, attrsOverflow: limitedAttrs.overflow, reloaded };
 }
 
 /** 沿 parentElement 上爬,穿透 shadow 边界(host),判定 el 的祖先是否在 set 内(顶层新增去嵌套用)。 */
