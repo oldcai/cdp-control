@@ -32,7 +32,7 @@ async function dispatchView(target: any, opts: any): Promise<{ lines: string[]; 
 }
 
 /** view 输出顶部图例(解释各标记,Agent 易跳过、不误当内容;只加在 view 命令顶层,反馈/自愈块不加)。 */
-const VIEW_LEGEND = '# [ref=i]=可操作索引 · [ref=i,visible]=当前视口内 · ~"…"=聚合文本 · ▸=已折叠(括号内为隐藏元素数,view <ref> 展开) · [shadow]=shadow DOM';
+const VIEW_LEGEND = '# [ref=i 状态]=可操作索引+pressed/checked/expanded/selected/disabled/open · ·屏=当前视口内 · ~"…"=聚合文本 · ▸=已折叠(括号内为隐藏元素数,view <ref> 展开) · [shadow]=shadow DOM';
 /** recipe 摘要输出顶部图例(复用 [ref=N] 约定,让 ref 自解释)。 */
 const RECIPE_LEGEND = '# 站点摘要(recipe 命中)· [ref=N]=可操作索引(可 click/fill/article 等按需展开)';
 
@@ -212,7 +212,7 @@ function printAction(line: string, r: any): void {
   }
 }
 
-/** 打印操作反馈:新增内容 / 文本变化 / tab 变化分块,内容 2 空格缩进。fb 为 null(--no-feedback)时无输出。 */
+/** 打印操作反馈:新增内容 / 文本变化 / 白名单属性变化 / tab 变化分块。fb 为 null(--no-feedback)时无输出。 */
 function printFeedback(fb: any): void {
   if (!fb) return;
   const out: string[] = [];
@@ -227,6 +227,20 @@ function printFeedback(fb: any): void {
   if (fb.changes?.length) {
     out.push('页面变化 · 文本变化:');
     for (const c of fb.changes) out.push('  · ' + (c.before ? `${c.before} → ${c.after}` : `"${c.after}"`));
+  }
+  if (fb.attrs?.length || fb.attrsOverflow) {
+    out.push('页面变化 · 属性变化:');
+    const shown = (value: string | null): string => value == null ? '∅' : value === '' ? '""' : value;
+    for (const a of fb.attrs || []) {
+      if (a.attr === 'class') {
+        const added = (a.after || '').split(/\s+/).filter(Boolean).map((token: string) => '+' + token);
+        const removed = (a.before || '').split(/\s+/).filter(Boolean).map((token: string) => '-' + token);
+        out.push(`  · ${a.desc} · class: ${added.concat(removed).join(' ')}`);
+      } else {
+        out.push(`  · ${a.desc} · ${a.attr}: ${shown(a.before)} → ${shown(a.after)}`);
+      }
+    }
+    if (fb.attrsOverflow) out.push(`  …还有 ${fb.attrsOverflow} 条属性变化`);
   }
   if (fb.tabs?.opened?.length) {
     out.push('新开 tab:');

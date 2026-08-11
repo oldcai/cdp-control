@@ -72,7 +72,7 @@ cdp-control run "./scripts/你的脚本.js"
 - **article**:命中就**只留文本、去 URL**(词保留、链接丢)。
 默认内置 `zhida.zhihu.com/search*`;存 `~/.cdp-control/rules/ignore-links.csv`,**手动编辑**(seed 自包内 `rules/`),无命令写入口。
 
-**图例**:整页 view 顶部有一行 `#` 注释图例,解释 `[ref=i]`(可操作索引)、`[ref=i,visible]`(当前视口内)、`~"…"`(聚合文本)、`▸`(已折叠)、`[shadow]`(shadow DOM)——Agent 读取时跳过 `#` 行即可,不会误当页面内容。无文本图标按钮(点赞/分享等)自动用 `aria-label/title` 兜底显示功能。
+**图例**:整页 view 顶部有一行 `#` 注释图例,解释 `[ref=i 状态]`(可操作索引及 pressed/checked/expanded/selected/disabled/open)、`·屏`(当前视口内)、`~"…"`(聚合文本)、`▸`(已折叠)、`[shadow]`(shadow DOM)——Agent 读取时跳过 `#` 行即可,不会误当页面内容。checkbox/radio 的 checked 并入 `input[type=… checked]`;无文本图标按钮(点赞/分享等)自动用 `aria-label/title` 兜底显示功能。
 
 **整页去噪(`fold` 持久规则,类 uBlock)**:长页整页 view 常混入导航/推荐/广告等噪声 ref。持久折叠规则**手动编辑 `~/.cdp-control/rules/fold.csv`** 把区域**折叠成一行**(`▸ [ref=i] <备注>`,保留 ref 可展开),跨会话持久;临时折叠用脚本 `api.fold(ref)`(不落盘)。
 

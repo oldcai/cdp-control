@@ -201,12 +201,14 @@ export type { TargetArg } from './target-arg';
 /** 操作反馈配置。feedbackDelay:操作后等待毫秒(默认 1000,给异步/懒加载内容出现留时间);noFeedback:关闭反馈。 */
 export interface FeedbackOpts { feedbackDelay?: number; noFeedback?: boolean }
 
-/** 反馈结构:内容变化(注入侧)+ tab 变化(Node 侧 /json/list diff)。 */
+/** 反馈结构:内容/文本/白名单属性变化(注入侧)+ tab 变化(Node 侧 /json/list diff)。 */
 export interface FeedbackResult {
   note?: string;                                    // 说明(如"页面已跳转,旧 ref 失效,以下是新页整页视图")
   reloaded?: boolean;                               // 注入侧判定:本次是否整页重载(换 document)
   blocks?: { lines: string[]; count: number }[];   // 去重折叠后的新增内容块(可空);重载时为整页视图单块
   changes?: { before?: string; after: string }[];  // 文本变化(过滤前后相同),如 [{before:'63',after:'64'}]
+  attrs?: { desc: string; attr: string; before: string | null; after: string | null }[]; // 白名单属性变化；class 两侧仅存移除/新增 token
+  attrsOverflow?: number;                          // 属性变化去重后超过 20 条的剩余数
   tabs?: { opened: Target[]; closed: Target[]; navigated?: { id: string; from: string; to: string }[] };
 }
 
@@ -242,6 +244,8 @@ async function runWithFeedback<T>(target: Target, doAction: () => Promise<T>, op
         feedback: {
           blocks: v.lines?.length ? [{ lines: v.lines, count: 1 }] : [],
           changes: [],
+          attrs: [],
+          attrsOverflow: 0,
           note: `页面已跳转: ${nav.from} → ${nav.to};旧页 DOM/ref 全部失效,以上为新 document 的整页视图(使用新登记表)`,
           tabs,
         },

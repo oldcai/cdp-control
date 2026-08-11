@@ -116,15 +116,57 @@ test('formatView: 登记过 ref 的叶子输出 [ref=i] 标注', () => {
 test('formatView: 根节点带 ref 也输出 [ref=i](反馈树根常是新增元素,ref 不能丢)', () => {
   const root = mk({ tag: 'div', isContent: true, text: '新增评论 1', size: 1, ref: 5, view: true });
   markText(root);
-  assert.deepEqual(formatView(root), ['div "新增评论 1" [ref=5, visible]']);
+  assert.deepEqual(formatView(root), ['div "新增评论 1" [ref=5·屏]']);
 });
 
-test('formatView: view=true 的带 ref 节点标 [ref=i, visible],无 view 只标 [ref=i]', () => {
+test('formatView: view=true 的带 ref 节点标 [ref=i·屏],无 view 只标 [ref=i]', () => {
   const onScreen = mk({ tag: 'button', isContent: true, text: '在屏', inter: true, size: 1, ref: 3, view: true });
   const offScreen = mk({ tag: 'button', isContent: true, text: '离屏', inter: true, size: 1, ref: 4, view: false });
   const root = mk({ tag: 'div', isContent: false, size: 3, kids: [onScreen, offScreen] });
   markText(root);
-  assert.deepEqual(formatView(root), ['div', '  button "在屏" [ref=3, visible]', '  button "离屏" [ref=4]']);
+  assert.deepEqual(formatView(root), ['div', '  button "在屏" [ref=3·屏]', '  button "离屏" [ref=4]']);
+});
+
+test('formatView: 语义状态跟在 ref/·屏 后且无状态时零额外输出', () => {
+  const pressed = mk({ tag: 'button', isContent: true, text: '赞', inter: true, size: 1, ref: 5, view: true, state: ['pressed'] });
+  const expanded = mk({ tag: 'button', isContent: true, text: '展开', inter: true, size: 1, ref: 9, state: ['expanded'] });
+  const disabled = mk({ tag: 'button', isContent: true, text: '', inter: true, size: 1, ref: 3, state: ['disabled'] });
+  const plain = mk({ tag: 'button', isContent: true, text: '取消', inter: true, size: 1, ref: 10 });
+  const root = mk({ tag: 'div', isContent: false, size: 5, kids: [pressed, expanded, disabled, plain] });
+  markText(root);
+  assert.deepEqual(formatView(root), [
+    'div',
+    '  button "赞" [ref=5·屏 pressed]',
+    '  button "展开" [ref=9 expanded]',
+    '  button [ref=3 disabled]',
+    '  button "取消" [ref=10]',
+  ]);
+});
+
+test('formatView: checkbox/radio 的 checked 并入 inputAttr,不在 ref 内重复', () => {
+  const checkbox = mk({
+    tag: 'input', isContent: true, inter: true, size: 1, ref: 7,
+    inputInfo: { type: 'checkbox' }, state: ['checked', 'disabled'],
+  });
+  const radio = mk({
+    tag: 'input', isContent: true, inter: true, size: 1, ref: 8,
+    inputInfo: { type: 'radio' }, state: ['checked=mixed'],
+  });
+  const root = mk({ tag: 'div', isContent: false, size: 3, kids: [checkbox, radio] });
+  markText(root);
+  assert.deepEqual(formatView(root), [
+    'div',
+    '  input[type=checkbox checked] [ref=7 disabled]',
+    '  input[type=radio checked=mixed] [ref=8]',
+  ]);
+});
+
+test('formatView: 无文本的原生状态容器仍输出状态行(details.open)', () => {
+  const details = mk({ tag: 'details', isContent: true, size: 1, ref: 12, state: ['open'] });
+  const wrap = mk({ tag: 'section', isContent: false, size: 2, kids: [details] });
+  const root = mk({ tag: 'div', isContent: false, size: 3, kids: [wrap] });
+  markText(root);
+  assert.deepEqual(formatView(root), ['div', '  section > details [ref=12 open]']);
 });
 
 test('formatView: 无 ref 节点不标 [ref=i](不回归)', () => {

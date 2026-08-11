@@ -5,7 +5,7 @@
  *
  * 契约:读取 __CDP_ARG__.rootExpr(解析建视图根元素的 JS 表达式串),把结果写入 setResult。
  * 输出为带缩进文本行数组(标签 + 引用文本),无 [看]/[架]/[X] 状态前缀。
- * 建视图复用 lib/view-core 的 buildView;带 ref 的节点额外标在视区(view,输出 [ref=i, visible])。
+ * 建视图复用 lib/view-core 的 buildView;带 ref 的节点额外标在视区(view,输出 [ref=i·屏])。
  */
 import { setResult } from './lib/result';
 import { markText, formatView } from './lib/view-format';

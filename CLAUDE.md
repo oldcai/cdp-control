@@ -55,7 +55,7 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 1. **结果写入**:写到全局 `globalThis.__cdpResult`(用 `lib/result.ts` 的 `setResult`)。
 2. **footer 读取**:`build.mjs` 给每个入口追加 footer `;(async()=>{const r=await globalThis.__cdpResult;delete globalThis.__cdpResult;return r})()`,整体完成值即结果,读完即删。同步入口传普通值;异步入口(如 `view --scroll-to-load`)可 `setResult(<promise>)`。`Runtime.evaluate` 开 `awaitPromise`。
 3. **参数传递**:注入脚本用自由标识符 `__CDP_ARG__`(TS `declare const __CDP_ARG__: XxxArgs`),Node 侧 `inject-loader.ts` 注入前拼 `var __CDP_ARG__ = <json>;`。
-4. **入参类型**在 `lib/arg.ts`(FindArgs——含 click 专用可选 `dom`/FillArgs/ViewArgs(含 FoldItem)/LocateArgs/FindCmdArgs/InfoArgs/ReadArgs/FoldArgs)。
+4. **入参类型**在 `lib/arg.ts`(FindArgs/FillArgs/ViewArgs(含 FoldItem)/LocateArgs/FindCmdArgs/InfoArgs/ReadArgs/FoldArgs)。
 
 **新增注入入口**:在 `src/inject/` 加顶层 `.ts`,用 `setResult` + 可选 `__CDP_ARG__`,重建自动打包成 `dist/inject/<名>.js`。注入侧跑浏览器,不能用 Node API。
 
@@ -80,6 +80,7 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 - **shadow host 占位**:带 `shadowRoot` 的 Element 标 `wantRef`+`isContent=true`。`view-format.walk` 对 `depth>0 && shadow && ref` 输出 `<tag>[shadow] [ref=N]` 不展开子树,根正常走子树。
 - **图标按钮兜底(`elLabel`)**:交互元素无直接文本时按 `aria-label → title → 直接文本` 取标。view 显示功能、article 降级 `[label]`,而非裸 `button [ref=N]`。
 - **表单采集**:simplify 对 INPUT/TEXTAREA 设 `inputInfo={type,value,placeholder}`(value 截 40),输出 `input[type=text value="..." placeholder="..."]`,agent 不必 eval。
+- **语义状态**:simplify 只读 DOM/ARIA 补 `node.state`(`pressed/checked/expanded/selected/disabled/open`,`mixed` 保留为 `name=mixed`);状态跟 ref 同括号输出，checkbox/radio 的 checked 并入 `input[...]`，无状态零额外字符。
 - **导出**:`strip`/`ownElText`(元素自身直接文本)/`subtreeText`(穿透 shadow)/`childrenOf`(穿透 shadow 取子)/`isInViewport`/`elLabel`/`buildView`。
 - **滚动加载**:整页完整 `view` 首次自动 `scrollToLoad()`(置 `__cdpFullViewDone`,同页只滚一次;局部/`--visible-only`/显式滚动参数不触发),滚动后默认等 `scrollWait`(默认 1000ms,`--scroll-wait 0` 关)才建树。`api.fetchPage` 靠它一次抓全,等待条件="body 有非空文本"。
 
@@ -116,7 +117,7 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 - **执行模型**:`extract(cdp, ctx)` 复用完整 `cdp` api(view/article/read/find/locate/eval/click)编排,返回 `{lines}`。信任边界:作者信任的本地代码(等同 run 脚本),非沙箱。
 - **抽取/呈现分层(L1)**:eval 字符串只做 DOM 读(返回 raw 文本 + ref),归一化与 ref 呈现归 Node 侧共享 `rules/recipes/_lib.js`(`clean`/`refstr`/`opHint`/`abridge`/`entry`,纯函数可单测)。**不要**在 eval 里手抄 clean/refstr、不要硬编码操作提示。
 - **只读探针(引擎原语)**:`lib/probe.ts` 随 view 注入装 `window.__cdpProbe`(recipe 必先 `cdp.view` 建树,故保证可用)。`refOf(el)` 反查已建树 ref、`refOfSelector(sel)`(穿透 shadow)、`text(el)`。**只查已建树、绝不按需注册**(否则平移 ref 全局号、断 parentRef 自愈链),未命中返回 `null`。recipe eval 里 `const { refOf, text } = window.__cdpProbe`,不再手抄样板。
-- **展开再读(引擎原语)**:`cdp.read(target, {container, expand?, wait?})`(Node 侧 api,杀折叠状态机痛点)。三步顺序 await——`expand` 则完成一次 trusted 坐标 `click` → Node `sleep` → `read-content` 注入(`src/inject/read-content.ts`)按 `container` selector 重查容器、展开重渲染替换元素则**末尾追加**登记(append 不平移既有号,同 find-entry),返回 ref → 复用 `article` 取完整 Markdown。**article 保持纯读不动**。折叠判定(哪个按钮=展开)留 recipe 按站点语义决定。
+- **展开再读(引擎原语)**:`cdp.read(target, {container, expand?, wait?})`(Node 侧 api,杀折叠状态机痛点)。三步分开各同步——`expand` 则 `click`(同步 eval 立即返回,避免同 eval 内 await 卡死)→ Node `sleep` → `read-content` 注入(`src/inject/read-content.ts`)按 `container` selector 重查容器、展开重渲染替换元素则**末尾追加**登记(append 不平移既有号,同 find-entry),返回 ref → 复用 `article` 取完整 Markdown。**article 保持纯读不动**。折叠判定(哪个按钮=展开)留 recipe 按站点语义决定。
 - **refOf(L2)**:只查已建树节点、**绝不按需注册**,未命中返回 `null` 而非 `-1`(语义「断言未建树」)。
 - **分发**:`view`/`fetch`(CLI action 顶层)调共享 `dispatchView`:无建树意图且命中 recipe → 输出摘要(带 RECIPE_LEGEND);未命中或**建树意图**(`--tree`/位置 ref/`--selector-file`/`--visible-only`/`--scroll-*`)→ 纯结构树。`api.view` 保持纯结构(fetchPage/操作反馈内部照旧,无递归)。run 脚本显式要摘要调 `cdp.recipe`。
 - **多规则命中**:匹配在跨文件×跨规则上做全序(每条规则取其与 URL 最匹配的 scope:通配最少 → 更长 → 声明顺序)。异常/返回 null → 安全回落树。
@@ -136,7 +137,7 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 - **Args**:`FindCmdArgs{text?,selector?,ancestor?,all?}`。
 
 ### feedback
-**变更感知**:`feedback-start/collect` 分两次 eval 协作,observer 存全局 `__cdpFeedback`。`startFeedback()` 装 MutationObserver 记 childList 新增+文本变化(前后值);`collectFeedback()` 断开后取**顶层新增元素**逐块 `buildView`,返回 `{blocks, changes}`。
+**变更感知**:`feedback-start/collect` 分两次 eval 协作,observer 存全局 `__cdpFeedback`。`startFeedback()` 装 MutationObserver 记 childList 新增+文本变化，以及白名单属性(`aria-*` 状态、checked/disabled/open/selected/class);`collectFeedback()` 断开后取**顶层新增元素**逐块 `buildView`,返回 `{blocks, changes, attrs}`。class 只报 token 差集，属性条目去重后限 20 条并回报溢出数。
 - **编排**:Node `runWithFeedback` = 动作 + `sleep(feedbackDelay)` + diff tab;`noFeedback` 不观察/不等待/不 diff。
 - **refInvalid 短路**:doAction 返回 `{refInvalid:true}` 则跳过 sleep/collect/tabdiff,透传 `recovered`。
 - **shadow 穿透**:`observeAll` 递归 document+所有 shadowRoot 各起共享 callback 的 observer(`MAX_SHADOW_DEPTH=3`),动态 host 用 `observeShadowTree` 补装。
@@ -145,13 +146,6 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 ### info(祖先链)
 **祖先链全貌**:`inject/info.ts` 列目标从 `<html>` 到自身的祖先链,每层紧凑描述 `tag/id/class/语义 data-*/aria-label/role` + `genSel` 建议。与 locate 差别:locate 回一个 genSel(工具帮我定);info 回祖先链全貌(我自己挑)。
 - **入口**:CLI `info <n> [--ancestor <k>]`;`api.info(target, ref, ancestor?)`;`cdp.ts` `printInfoChain` 格式化输出。
-
-### click/hover(坐标输入)
-**真实点击**:`inject/click.ts` 默认 `scrollIntoView(center/instant)` 后取元素中心 CSS 视口坐标;零尺寸/中心出视口直接报错。`document.elementFromPoint` 命中链会逐层进入 open `shadowRoot`,只有命中目标自身、后代或跨 shadow 的宿主组合包含关系才放行,否则报紧凑遮挡者 `<tag.class>`。
-- **Node 事件链**:`api.click` 收到 `{x,y,tag,shadow,selector}` 后在同一连接中依次发 `Input.dispatchMouseEvent`:mouseMoved → mousePressed(left/buttons=1/clickCount=1) → mouseReleased(left/buttons=0/clickCount=1)。默认不调用 `el.click()`,所以事件走浏览器输入管线并有完整 pointer/mouse/focus/click 链。
-- **显式兜底**:CLI `click --dom` / API `{dom:true}` 才走旧 `el.click()` 合成路径(`isTrusted:false`),供 fixed 布局滚不进视口时使用;遮挡/零尺寸绝不自动 fallback,保证语义稳定。
-- **不变量**:坐标准备返回 `refInvalid` 时 api 直接透传且不 dispatch;动作仍完整包在 `runWithFeedback`,tag/actionSelector 回显与 ref 自愈契约不变。`hover` 继续复用同类“注入算中心 → Node dispatch mouseMoved”边界。
-- **纯函数**:`inject/lib/click-position.ts` 提供中心视口判断和逐层命中链组合判定;`src/click-events.ts` 生成固定三段事件序列,均有零 DOM/运行时依赖单测。
 
 ### target-arg
 **目标归一化**:`src/target-arg.ts`(纯函数零依赖)`normArg(a)` 把 click/fill/focus/hover 目标(selector 字符串或 `{ref,ancestor?}` 对象)归一化为 `{sel?}/{ref?}`。
@@ -164,8 +158,8 @@ Node 侧统一 `invoke(target, expr)` 执行注入脚本并解包:成功返回�
 ## 测试
 
 - `tests/*.test.ts` 用 Node 内置 `node:test`+`node:assert/strict`,零运行时依赖。
-- 纯函数单测:`view-utils.ts`、`view-format.ts`(formatView/markText)、`genSel.ts`、`find-root.ts`(refElement/climbAncestors/classifyRef)、`click-position.ts`(中心可用性/跨 shadow 命中链)、`click-events.ts`(moved/pressed/released 顺序与参数)、`folds.ts`(parseRules/domainMatch/pathMatch/matchFolds/loadFolds,临时 CDP_FOLD_FILE)、`ignore-links.ts`(hrefForMatch/globToRegExp/linkRuleMatch/parseLinkRules + 浏览器侧 linkIgnored)、`target-arg.ts`(normArg 防呆)、`keys.ts`(parseKeySpec)、`transport.ts`(resolveTarget)。
-- 注入侧 DOM 相关(buildView/fold/inputInfo、find-entry 穿透 shadow、feedback observer/子树黑名单、recoverRef live 分支)依赖真实 DOM,靠浏览器实测(见 SKILL.md),不写单测。纯函数分支(`formatView` 的 `·屏`/shadow 占位/fold 优先/`inputAttr`、`feedback` 的 `foldTimestampRun`)有单测。
+- 纯函数单测:`view-utils.ts`、`view-format.ts`(formatView/markText)、`genSel.ts`、`find-root.ts`(refElement/climbAncestors/classifyRef)、`folds.ts`(parseRules/domainMatch/pathMatch/matchFolds/loadFolds,临时 CDP_FOLD_FILE)、`ignore-links.ts`(hrefForMatch/globToRegExp/linkRuleMatch/parseLinkRules + 浏览器侧 linkIgnored)、`target-arg.ts`(normArg 防呆)、`keys.ts`(parseKeySpec)、`transport.ts`(resolveTarget)。
+- 注入侧 DOM 相关(buildView/fold/inputInfo/state、find-entry 穿透 shadow、feedback observer/子树黑名单、recoverRef live 分支)依赖真实 DOM,靠浏览器实测(见 SKILL.md),不写单测。纯函数分支(`formatView` 的 `·屏`/状态/shadow 占位/fold 优先/`inputAttr`、`feedback` 的 `foldTimestampRun`/class 差集/属性限量)有单测。
 
 ## 文档分工
 

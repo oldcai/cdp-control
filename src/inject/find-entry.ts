@@ -38,7 +38,7 @@ const DROP_TAGS = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPL
 /** 取命中元素的 line(formatView 根行,标上分配的 ref 号)。 */
 function lineOf(el: Element, ref: number): string {
   const v = buildView(el, { viewport: true });
-  v.ref = ref; // 根节点标上分配的 ref,formatView 输出 [ref=N, visible?]
+  v.ref = ref; // 根节点标上分配的 ref,formatView 输出 [ref=N·屏? 状态?]
   markText(v);
   const lines = formatView(v);
   return lines[0] || `${el.tagName.toLowerCase()} [ref=${ref}]`;
