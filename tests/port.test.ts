@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:net';
-import { portFree, portFreeOn, findFreePort, endpointAlive, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
+import { portFree, portFreeOn, findFreePort, endpointAlive, resolveHostAddrs, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
 
 function listen(port: number, host = '127.0.0.1'): Promise<Server> {
   return new Promise((resolve, reject) => {
@@ -89,6 +89,19 @@ test('endpointAlive: localhost 任一回环有人应答就算活着(kill 别把�
   assert.equal(await endpointAlive(port, 'localhost'), true);
   await close(s6);
   assert.equal(await endpointAlive(port, 'localhost'), false);
+});
+
+test('resolveHostAddrs: 数值地址与 localhost 不查 DNS,其它主机名解析出全部地址', async () => {
+  const noCall = (async () => { throw new Error('不该查 DNS'); }) as unknown as Parameters<typeof resolveHostAddrs>[1];
+  assert.deepEqual(await resolveHostAddrs('127.0.0.1', noCall), ['127.0.0.1']);
+  assert.deepEqual(await resolveHostAddrs('::1', noCall), ['::1']);
+  assert.deepEqual(await resolveHostAddrs('localhost', noCall), ['127.0.0.1', '::1']);
+  // 主机名解析出多个地址 → 全部返回(只 bind 首个会漏另一地址上的占用)
+  const two = (async () => [{ address: '::1' }, { address: '127.0.0.1' }]) as unknown as Parameters<typeof resolveHostAddrs>[1];
+  assert.deepEqual(await resolveHostAddrs('my-dev-box', two), ['::1', '127.0.0.1']);
+  // 解析失败 → 原样返回,维持"判断不了"语义(listen/connect 自己会报错)
+  const boom = (async () => { throw new Error('ENOTFOUND'); }) as unknown as Parameters<typeof resolveHostAddrs>[1];
+  assert.deepEqual(await resolveHostAddrs('no-such-host.invalid', boom), ['no-such-host.invalid']);
 });
 
 test('addrServes: lsof 的 `*` 通配必须靠 t 字段(IPv4/IPv6)定族,拿不到就不认', () => {

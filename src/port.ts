@@ -5,7 +5,8 @@
  * 而是静默退到 [::1]:<port>,客户端连 127.0.0.1 永远拿不到 /json/version,表现为"启动超时/
  * 未找到可用浏览器"。故启动前先探空、被占就换端口。
  */
-import { createServer, connect } from 'node:net';
+import { createServer, connect, isIP } from 'node:net';
+import { lookup } from 'node:dns/promises';
 
 /**
  * host:port 能否绑定(能绑=空闲)。**只有 `EADDRINUSE` 才算被占**:绑不上的其它原因
@@ -22,13 +23,33 @@ export function portFree(port: number, host = '127.0.0.1'): Promise<boolean> {
 }
 
 /**
+ * host → 应逐个探测的地址集合(异步,可能查 DNS):数值地址/`localhost` 走 `hostAddrs` 不查;
+ * 其它主机名 `dns.lookup all:true` 拿**全部**地址——主机名只 `listen` 一次会漏:Node 对主机名
+ * 只绑首个解析结果,端口在另一个地址上被占时照样报"空闲",客户端却可能顺着那个地址连到无关进程
+ * (与 `localhost` 特判同一类问题,这里推广到任意主机名)。解析失败原样返回,listen/connect
+ * 自己会报错,维持"判断不了"语义。`lk` 可注入,单测不打真 DNS。
+ */
+export async function resolveHostAddrs(host: string, lk: typeof lookup = lookup): Promise<string[]> {
+  const addrs = hostAddrs(host);
+  if (addrs.length > 1 || isIP(addrs[0])) return addrs;
+  try {
+    const r = await lk(addrs[0], { all: true });
+    return r.length ? r.map(a => a.address) : addrs;
+  } catch { return addrs; }
+}
+
+async function allFree(port: number, addrs: string[]): Promise<boolean> {
+  for (const a of addrs) if (!(await portFree(port, a))) return false;
+  return true;
+}
+
+/**
  * 端口对**我们要连的那个 host** 是否可用:host 解析出的每个地址都要能绑
  * (`localhost` = 两个回环都得空)。只探 127.0.0.1 会漏:CDP_HOST=localhost 且只有 `[::1]:port`
  * 被别人占着时,IPv4 探测报"空闲",浏览器绑上 IPv4,客户端却可能顺着 ::1 去问那个无关进程。
  */
 export async function portFreeOn(port: number, host = '127.0.0.1'): Promise<boolean> {
-  for (const a of hostAddrs(host)) if (!(await portFree(port, a))) return false;
-  return true;
+  return allFree(port, await resolveHostAddrs(host));
 }
 
 /**
@@ -39,7 +60,7 @@ export async function portFreeOn(port: number, host = '127.0.0.1'): Promise<bool
  */
 export async function endpointAlive(port: number, host = '127.0.0.1', timeoutMs = 1000): Promise<boolean | null> {
   let unknown = false;
-  for (const a of hostAddrs(host)) {
+  for (const a of await resolveHostAddrs(host)) {
     const r = await connectProbe(port, a, timeoutMs);
     if (r === true) return true;
     if (r === null) unknown = true;
@@ -57,9 +78,10 @@ function connectProbe(port: number, host: string, timeoutMs: number): Promise<bo
   });
 }
 
-/** 从 start 起找第一个对 host 空闲的端口(含 start);span 内全被占则抛清晰错。 */
+/** 从 start 起找第一个对 host 空闲的端口(含 start);span 内全被占则抛清晰错。host 只解析一次。 */
 export async function findFreePort(start: number, span = 50, host = '127.0.0.1'): Promise<number> {
-  for (let p = start; p < start + span; p++) if (await portFreeOn(p, host)) return p;
+  const addrs = await resolveHostAddrs(host);
+  for (let p = start; p < start + span; p++) if (await allFree(p, addrs)) return p;
   throw new Error(`端口 ${start}-${start + span - 1} 全被占用,无法启动浏览器`);
 }
 
