@@ -7,11 +7,11 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
-import { getJson, setPort } from './transport';
+import { getJson, setPort, HOST } from './transport';
 import { maybeSpawnDaemon } from './monitor';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
 import { browserConfigPath, parseBrowserConfig, defaultArgs, DEFAULT_PORT, DEFAULT_USER_DATA, type BrowserConfig } from './browser-config';
-import { portFree, findFreePort, parseNetstatListeners, parsePids } from './port';
+import { portFree, findFreePort, parseNetstatListeners, parseLsofListeners } from './port';
 
 export interface EnsureResult { ready: boolean; started: boolean; browser?: string; userData?: string; }
 export interface KillResult { ok: boolean; port: number; reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken'; }
@@ -181,16 +181,19 @@ export async function ensureBrowser(): Promise<EnsureResult> {
 }
 
 /**
- * 找出**监听** port 的进程 pid 列表(win 走 netstat,posix 走 lsof)。
- * 只认 LISTEN:`lsof -ti :port` 会把"连到该端口的客户端"(本工具的 monitor daemon 就是)
- * 也列出来,取首个可能杀错人、浏览器还活着 → kill 报"未完全生效"(2026-08 m2 实测)。
+ * 找出**在 `HOST:port` 上监听**的进程 pid(win 走 netstat,posix 走 lsof)。两道过滤缺一不可:
+ * - 只认 LISTEN:`lsof -ti :port` 把"连到该端口的客户端"(本工具的 monitor daemon 就是)也列出来,
+ *   取首个会杀错人、浏览器还活着 → kill 报"未完全生效"(2026-08 m2 实测)。
+ * - 只认服务 `HOST` 的地址:同一个端口号在 IPv4/IPv6 上是两个独立监听、可能属于两个不相干的进程
+ *   (m2 上就同时有 `127.0.0.1:9222` 与 `[::1]:9222` 两个 Chrome)。只杀我们这条连接对面的那个,
+ *   否则 kill 会顺手打死用户自己的进程。
  */
 function pidsOnPort(port: number): number[] {
   try {
     if (process.platform === 'win32') {
-      return parseNetstatListeners(execFileSync('netstat', ['-ano'], { encoding: 'utf8' }), port);
+      return parseNetstatListeners(execFileSync('netstat', ['-ano'], { encoding: 'utf8' }), port, HOST);
     }
-    return parsePids(execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }));
+    return parseLsofListeners(execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpn'], { encoding: 'utf8' }), port, HOST);
   } catch { return []; }
 }
 

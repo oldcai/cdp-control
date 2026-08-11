@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:net';
-import { portFree, findFreePort, parseNetstatListeners, parsePids } from '../src/port.ts';
+import { portFree, findFreePort, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
 
 function listen(port: number, host = '127.0.0.1'): Promise<Server> {
   return new Promise((resolve, reject) => {
@@ -52,12 +52,31 @@ test('parseNetstatListeners: 只取 LISTENING 且本地端口精确匹配(win �
   assert.deepEqual(parseNetstatListeners(out, 9222), [6634]);
 });
 
-test('parseNetstatListeners: 多个监听进程都返回', () => {
+test('parseNetstatListeners: 同端口号不同地址族的两个进程,只取服务该 host 的那个', () => {
   const out = '  TCP    127.0.0.1:9223  0.0.0.0:0  LISTENING  11\n  TCP    [::1]:9223  [::]:0  LISTENING  22';
-  assert.deepEqual(parseNetstatListeners(out, 9223), [11, 22]);
+  assert.deepEqual(parseNetstatListeners(out, 9223), [11]);          // 默认 host=127.0.0.1,只认 IPv4 那个
+  assert.deepEqual(parseNetstatListeners(out, 9223, '::1'), [22]);   // host 换成 IPv6 才认 [::1]
 });
 
-test('parsePids: 解析 lsof -t 输出,去重去空', () => {
-  assert.deepEqual(parsePids('123\n456\n123\n\n'), [123, 456]);
-  assert.deepEqual(parsePids(''), []);
+test('addrServes: 只认服务该 host 的监听地址(端口号相同但另一地址族不算)', () => {
+  assert.equal(addrServes('127.0.0.1:9222', '127.0.0.1', 9222), true);
+  assert.equal(addrServes('0.0.0.0:9222', '127.0.0.1', 9222), true);   // IPv4 通配
+  assert.equal(addrServes('*:9222', '127.0.0.1', 9222), true);         // lsof 通配写法
+  assert.equal(addrServes('[::1]:9222', '127.0.0.1', 9222), false);    // 同端口号但另一族 → 不是我们的端点
+  assert.equal(addrServes('[::]:9222', '127.0.0.1', 9222), false);
+  assert.equal(addrServes('127.0.0.1:92220', '127.0.0.1', 9222), false);
+  // host 换成 IPv6 时反过来
+  assert.equal(addrServes('[::1]:9222', '::1', 9222), true);
+  assert.equal(addrServes('[::]:9222', '::1', 9222), true);
+  assert.equal(addrServes('127.0.0.1:9222', '::1', 9222), false);
+});
+
+test('parseLsofListeners: 按 p/n 分段取 pid,只留服务该 host 的监听', () => {
+  const out = ['p6634', 'f79', 'n127.0.0.1:9222',      // 我们的浏览器
+               'p99084', 'f49', 'n[::1]:9222',         // 同端口号、另一族的无关进程 → 不能杀
+               'p12345', 'f7', 'n*:9222',              // 通配监听 → 算
+               'p777', 'f9', 'n127.0.0.1:9999'].join('\n');
+  assert.deepEqual(parseLsofListeners(out, 9222), [6634, 12345]);
+  assert.deepEqual(parseLsofListeners(out, 9222, '::1'), [99084, 12345]);
+  assert.deepEqual(parseLsofListeners('', 9222), []);
 });
