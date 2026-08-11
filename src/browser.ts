@@ -7,12 +7,11 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { getJson, setPort, PORT } from './transport';
+import { getJson, setPort } from './transport';
 import { maybeSpawnDaemon } from './monitor';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
-import { browserConfigPath, parseBrowserConfig, defaultArgs, type BrowserConfig } from './browser-config';
+import { browserConfigPath, parseBrowserConfig, defaultArgs, DEFAULT_PORT, DEFAULT_USER_DATA, type BrowserConfig } from './browser-config';
+import { portFree, findFreePort } from './port';
 
 export interface EnsureResult { ready: boolean; started: boolean; browser?: string; userData?: string; }
 export interface KillResult { ok: boolean; port: number; reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken'; }
@@ -84,8 +83,22 @@ function loadConfigOrNull(): BrowserConfig | null {
   return cfg;
 }
 
+/**
+ * 定端口:want 空闲就用它;被别的进程占着(走到 coldStart 说明它不是可用 CDP 端点,
+ * 否则 probeReady 早命中了)则换下一个空闲端口 —— 不换的话 Chrome 会静默绑到 [::1],
+ * 客户端连 127.0.0.1 永远超时。cfgPath 给了就把新端口回写配置(下次直接对)。
+ */
+async function pickPort(want: number, cfgPath?: string, cfg?: BrowserConfig): Promise<number> {
+  if (await portFree(want)) { setPort(want); return want; }
+  const port = await findFreePort(want + 1);
+  setPort(port);
+  if (cfgPath && cfg) writeConfigAtomic(cfgPath, { ...cfg, port });
+  console.error(`⚠ 端口 ${want} 被其它进程占用(且不是可用的 CDP 端点),改用 ${port}${cfgPath && cfg ? `,已更新 ${cfgPath}` : ''}`);
+  return port;
+}
+
 /** 冷启动:有配置则用(坏则抛,不兜底);无配置则 bootstrap 发现并写配置。 */
-async function coldStart(): Promise<{ kind: BrowserKind; exe: string; userData: string }> {
+async function coldStart(): Promise<{ kind: BrowserKind; exe: string; userData: string; port: number }> {
   const p = browserConfigPath();
 
   if (existsSync(p)) {
@@ -95,27 +108,33 @@ async function coldStart(): Promise<{ kind: BrowserKind; exe: string; userData: 
     if (!cfg) throw new Error(`浏览器启动配置损坏,不做兜底,请编辑 ${p}`);
     if (!existsSync(cfg.exe)) throw new Error(`browser.json 的 exe 不存在: ${cfg.exe}\n请编辑 ${p}`);
     mkdirSync(cfg.userData, { recursive: true });
-    launch(cfg.exe, cfg.args, cfg.port, cfg.userData);
+    const port = await pickPort(cfg.port, p, cfg);
+    launch(cfg.exe, cfg.args, port, cfg.userData);
     await waitReady();
     maybeSpawnDaemon();
-    return { kind: cfg.kind, exe: cfg.exe, userData: cfg.userData };
+    return { kind: cfg.kind, exe: cfg.exe, userData: cfg.userData, port };
   }
 
-  // 缺失 → bootstrap:逐个候选尝试,首个能拉起者写配置(port/userData 用默认值)
-  const port = 9222;
-  const userData = join(homedir(), '.cdp-control', 'user-data');
+  // 缺失 → bootstrap:逐个候选尝试,首个能拉起者写配置(userData 用默认值,port 取首个空闲)
+  const port = await pickPort(DEFAULT_PORT);
+  const userData = DEFAULT_USER_DATA();
   mkdirSync(userData, { recursive: true });
+  const tried: string[] = [];
   for (const c of discoverCandidates()) {
     const exe = resolveExe(c.exe);
     if (!exe) continue;
+    tried.push(exe);
     const args = defaultArgs();
     try { launch(exe, args, port, userData); await waitReady(); }
     catch { killLast(); continue; }
     writeConfigAtomic(p, { exe, kind: c.kind, args, port, userData });
     maybeSpawnDaemon();
-    return { kind: c.kind, exe, userData };
+    return { kind: c.kind, exe, userData, port };
   }
-  throw new Error(`未找到可用浏览器。可手动创建 ${p} 指定 exe/args`);
+  // 区分两种失败:一个候选都不存在 vs 存在但都没在端口上就绪(后者给出试过谁,别让人以为没装浏览器)
+  throw new Error(tried.length
+    ? `找到浏览器但都没能在端口 ${port} 就绪(试过: ${tried.join(', ')})。可手动创建 ${p} 指定 exe/args/port`
+    : `未找到可用浏览器。可手动创建 ${p} 指定 exe/args`);
 }
 
 /** 确保有 CDP 浏览器在跑:就绪零开销(1 GET);未就绪自动拉起。 */
@@ -126,8 +145,9 @@ export async function ensureBrowser(): Promise<EnsureResult> {
   const probe = await probeReady();
   if (probe.ready) return { ready: true, started: false, browser: probe.browser, userData: cfg?.userData };
   const info = await coldStart();
-  console.error(`已自动启动浏览器: ${describeBrowser(info.exe)} (端口 ${Number(PORT)})`);
-  return { ready: true, started: true, browser: describeBrowser(info.exe), userData: info.userData };
+  const name = `${info.kind} ${info.exe}`;
+  console.error(`已自动启动浏览器: ${name} (端口 ${info.port})`);
+  return { ready: true, started: true, browser: name, userData: info.userData };
 }
 
 /** 找出监听 port 的进程 pid(win 走 netstat,posix 走 lsof);无则 null。 */
