@@ -5,7 +5,7 @@
  *   collectFeedback() — 断开 observer,取"顶层新增元素"逐块建视图拼接,产摘要。
  * 等待时长由 Node 侧(sleep)控制,不在此注入侧;node 侧在两次调用之间等待 delayMs。
  *
- * ref 语义:collect **不重置 __cdpRefs,只追加**——反馈新增的 ref 从现有长度递增,不顶掉整页旧 ref
+ * ref 语义:collect **不重置 __cdpRefs**——已登记元素复用旧号,首次见到的反馈元素从表尾追加,不顶掉整页旧 ref
  * (整页 view 才重置)。agent 用反馈树的增量 ref 操作新增内容,同时原 ref 依旧有效。
  *
  * shadow 穿透:MutationObserver 默认只观察调用 observe 的那棵树,**不进 shadowRoot**——B站点赞数、
@@ -160,7 +160,7 @@ export function collectFeedback(opts: { viewport?: boolean } = {}): FeedbackResu
   const els = added.filter(n => n.nodeType === 1) as Element[];
   const set = new Set(els);
   const roots = els.filter(el => !hasAncestorInSet(el, set));
-  // 不重置 __cdpRefs:反馈新增 ref 从现有长度递增,顶掉旧 ref 会丢整页句柄(曾踩坑)。
+  // 不重置 __cdpRefs:已登记元素复用,首次见到的反馈元素追加；顶掉旧 ref 会丢整页句柄(曾踩坑)。
   // 逐块建视图,按整块 lines 去重折叠(同内容多次出现,如广告,只留一条 + 计数)。
   const seen = new Map<string, FeedbackBlock>();
   const order: string[] = [];

@@ -5,7 +5,10 @@
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { findRoot, refElement, climbAncestors, inShadow, outermostHost, buildShadowChain } from '../src/inject/lib/find-root.ts';
+import { findRoot, refElement, climbAncestors, entryEl, entryParent, inShadow, outermostHost, buildShadowChain } from '../src/inject/lib/find-root.ts';
+
+type RefTestGlobals = typeof globalThis & { __cdpRefs?: unknown[] };
+const refGlobals = globalThis as RefTestGlobals;
 
 // ---- 全局 stub:document.querySelector(各测试填 uniqueSel) ----
 const uniqueSel = new Map<string, any>();
@@ -30,29 +33,61 @@ class FakeShadowRoot {
 beforeEach(() => { uniqueSel.clear(); stubDocument(); });
 
 /** 构造含 parentElement/children 的假元素链。 */
-function makeChain(...tags: string[]) {
-  const els: any[] = [];
+type FakeChainElement = {
+  tagName: string;
+  nodeType: 1;
+  isConnected: boolean;
+  parentElement: FakeChainElement | null;
+  children: FakeChainElement[];
+};
+
+function makeChain(...tags: string[]): Element[] {
+  const els: FakeChainElement[] = [];
   for (const t of tags) {
-    const el = { tagName: t, nodeType: 1, parentElement: null as any, children: [] as any[] };
+    const el: FakeChainElement = { tagName: t, nodeType: 1, isConnected: true, parentElement: null, children: [] };
     if (els.length) { el.parentElement = els[els.length - 1]; els[els.length - 1].children.push(el); }
     els.push(el);
   }
-  return els; // [0]=最上层根 ... [n-1]=最深层叶
+  return els as unknown as Element[]; // [0]=最上层根 ... [n-1]=最深层叶
 }
 
 test('refElement: 按序号取真实元素', () => {
   const [a, mid, leaf] = makeChain('div', 'div', 'span');
-  (globalThis as any).__cdpRefs = [a, mid, leaf];
+  refGlobals.__cdpRefs = [a, mid, leaf];
   assert.equal(refElement(0), a);
   assert.equal(refElement(2), leaf);
   assert.equal(refElement(3), null);      // 越界
   assert.equal(refElement(-1), null);
 });
 
-test('refElement: 非元素节点(如文本节点)不入 ref,返回 null', () => {
-  (globalThis as any).__cdpRefs = [{ nodeType: 3, textContent: 'x' }];
+test('refElement: 兼容旧 {el} 与新 {elRef} 槽位', () => {
+  const [legacy, weak] = makeChain('div', 'button');
+  refGlobals.__cdpRefs = [
+    { el: legacy, parentRef: null },
+    { elRef: new WeakRef(weak), parentRef: 0 },
+  ];
+  assert.equal(refElement(0), legacy);
+  assert.equal(refElement(1), weak);
+});
+
+test('refElement: WeakRef 已释放或元素 detached 均按 stale 返回 null', () => {
+  const detached = { nodeType: 1, isConnected: false } as unknown as Element;
+  const released = { deref: () => undefined } as unknown as WeakRef<Element>;
+  const releasedEntry = { elRef: released, parentRef: 0 };
+  refGlobals.__cdpRefs = [
+    { elRef: new WeakRef(detached), parentRef: null },
+    releasedEntry,
+  ];
   assert.equal(refElement(0), null);
-  (globalThis as any).__cdpRefs = undefined;
+  assert.equal(refElement(1), null);
+  assert.equal(entryEl(releasedEntry), undefined);
+  assert.equal(entryParent(releasedEntry), 0);
+});
+
+test('refElement: 非元素节点(如文本节点)不入 ref,返回 null', () => {
+  refGlobals.__cdpRefs = [{ nodeType: 3, textContent: 'x' }];
+  assert.equal(refElement(0), null);
+  refGlobals.__cdpRefs = undefined;
   assert.equal(refElement(0), null);
 });
 

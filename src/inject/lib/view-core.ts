@@ -3,14 +3,14 @@
  * 被 view 入口与操作反馈(feedback-collect)共享:把"整棵 DOM 区域 → 内部 ViewNode 树"的逻辑集中于此。
  * 含 DOM 采集(simplify)与 visible-only 裁剪(prune),与纯变换(formatView/markText)分离。
  *
- * 注意:buildView 只"追加" ref 到 __cdpRefs,**不重置**——重置时机由调用方决定
- * (view 入口在整页建视图前重置;反馈收集在拼接多个新增块前重置一次,保证跨块 ref 连续)。
+ * 注意:buildView 不重置 __cdpRefs；已登记元素复用旧号，首次见到的元素只在表尾追加。
  */
 import type { ViewNode } from './view-format.ts';
 import { tmpFolds } from './fold.ts';
 import type { FoldItem } from './arg.ts';
 import { linkIgnored } from './ignore-links.ts';
 import { cut, isPureCount } from './view-utils.ts';
+import { registerRef } from './find-root.ts';
 
 export interface ViewBuildOpts { visibleOnly?: boolean; viewport?: boolean; folds?: FoldItem[]; ignoreLinks?: string[]; maxLen?: number }
 
@@ -104,9 +104,8 @@ export const elLabel = (el: Element): string => {
  * opts.viewport:对带 ref 的节点算 node.view(输出 [ref=i, visible] 标记),见 lib/view-format.ts。
  *
  * ref 两遍先序登记:遍一(simplify)建树 + 打标记(wantRef/wantHidden)+ 暂存 el,**不登记 __cdpRefs**;
- * 遍二(assign)按先序 DFS 一次性分配 ref,号随树位置单调增——之前隐藏容器 ref 在递归后 append 到尾部,
- * 导致结构祖先(html/body/#root)拿到高位号、与树顶位置矛盾(见 info 链)。先序后 html/body 变低位,内容号递增。
- * 只追加、不重置——重置由调用方决定(view 入口整页前重置;局部/反馈/自愈从当前长度继续)。 */
+ * 遍二(assign)按先序 DFS 复用或追加 ref；输出仍按树序，但复用后的数字不保证单调。
+ * 每次 assign 都按本次树位置刷新 parentRef，SPA 重排后跳表仍指向当前最近已登记祖先。 */
 export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}): ViewNode {
   const visibleOnly = !!opts.visibleOnly;
   const viewport = !!opts.viewport;
@@ -320,13 +319,10 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
   // —— 遍二:先序 DFS 分配 ref + parentRef。wantRef→设 node.ref 并打印;wantHidden→登记但不打印 ——
   function assign(n: ViewNode, parentRef: number | null): void {
     let childParent: number | null = parentRef;
-    if (n.wantRef && n.el) {
-      n.ref = (globalThis as any).__cdpRefs.length;
-      // 登记表存 {el, parentRef}:parentRef = 最近的已登记祖先 ref 号(跳表),供 ref 失效自愈向上找存活容器。
-      (globalThis as any).__cdpRefs.push({ el: n.el, parentRef });
-      if (n.ref != null) childParent = n.ref;
-    } else if (n.wantHidden && n.el) {
-      (globalThis as any).__cdpRefs.push({ el: n.el, parentRef });
+    if ((n.wantRef || n.wantHidden) && n.el) {
+      const ref = registerRef(n.el, parentRef);
+      if (n.wantRef) n.ref = ref;
+      childParent = ref;
     }
     for (const k of n.kids) assign(k, childParent);
   }
