@@ -1,7 +1,7 @@
 /**
  * find-entry.ts — find 命令注入入口(类 uBlock `:has-text()` 思想,但语义更贴合 agent 找元素)。
  *
- * agent 的痛点:整页 view 输出严禁 grep(SKILL 铁律),但 ref 又会随每次 view 重排失效。
+ * agent 的痛点:整页 view 输出严禁 grep(SKILL 铁律),重新定位某个文本元素又不该重读整棵树。
  * 想重新定位某个文本元素(如"28 条评论"按钮)时,只能整页 view 再肉眼找——既费 token 又违规。
  * find 弥补:直接按文本/selector 找元素,登记新 ref 返回,不必整页重 view。
  *
@@ -14,7 +14,7 @@
  *   2. --selector <css>:document.querySelector(支持 `>>>` shadow 链,复用 findRoot)。
  *      配 --all 改用 querySelectorAll(支持 `>>>` 链,见 findRootAll),逐个登记。
  *
- * 命中元素登记进 __cdpRefs(**追加**,不重置——保留整页旧 ref),拿 ref 号;buildView 该元素
+ * 命中元素通过统一 helper 登记进 __cdpRefs(已登记复用、首次见到追加),拿 ref 号;buildView 该元素
  * 取根行输出(把根节点 ref 标成 push 拿到的号,formatView 自动输出 [ref=N])。
  * --text + --all:收集全部命中并各自登记;否则首个。
  * --ancestor:命中后向上爬 N 层到容器(把内容叶子抬到区域容器,与 view/locate 一致)。
@@ -24,7 +24,7 @@
  * 配 visited Set 防环 / 防 shadow 重入。核心遍历逻辑抽在 lib/find-search.ts(无 DOM 依赖可单测)。
  */
 import { setResult } from './lib/result';
-import { findRoot, findRootAll, climbAncestors } from './lib/find-root';
+import { findRoot, findRootAll, climbAncestors, registerRef } from './lib/find-root';
 import { childrenOf, ownElText } from './lib/view-core';
 import { buildView } from './lib/view-core';
 import { markText, formatView } from './lib/view-format';
@@ -34,13 +34,6 @@ import type { FindCmdArgs } from './lib/arg';
 declare const __CDP_ARG__: FindCmdArgs;
 
 const DROP_TAGS = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'SVG', 'PATH', 'BR']);
-
-/** 把命中元素登记进 __cdpRefs(追加),返回 ref 号。parentRef=null:find 出的元素独立,无跳表父。 */
-function registerHit(el: Element): number {
-  const refs = (globalThis as any).__cdpRefs || ((globalThis as any).__cdpRefs = []);
-  refs.push({ el, parentRef: null });
-  return refs.length - 1;
-}
 
 /** 取命中元素的 line(formatView 根行,标上分配的 ref 号)。 */
 function lineOf(el: Element, ref: number): string {
@@ -82,7 +75,7 @@ function searchText(root: Element, needle: string): Element[] {
   const picked = a.all ? hits : [hits[0]];
   const out = picked.map(el => {
     const target = climbAncestors(el, a.ancestor || 0) || el;
-    const ref = registerHit(target);
+    const ref = registerRef(target);
     const tag = target.tagName.toLowerCase();
     // text 用元素自身直接文本(与 locate 一致,不子树聚合)
     const text = ownElText(target).slice(0, 60);

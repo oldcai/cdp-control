@@ -155,7 +155,7 @@ export async function article(target: Target, ref: number, ancestor?: number): P
  * 展开再读(recipe 用,杀 P2/P3):按稳定 `container` selector 取正文容器的完整 Markdown。
  * 可选 `expand`(展开按钮的 ref `{ref:N}` / selector / 数字)先点击展开、Node 侧等待重渲染,
  * 再重查容器取全文。三步分开各同步:点击(同步 eval 立即返回,避免同 eval 内 await 卡死)→
- * Node sleep → read-content 重查容器(展开重渲染替换元素则末尾追加)。容器以 selector 每次重查为锚,
+ * Node sleep → read-content 重查容器(旧元素复号,展开重渲染替换的新元素追加)。容器以 selector 每次重查为锚,
  * 免疫 ref 漂移;article 保持纯读不动。折叠判定(要不要展开)仍由 recipe 按站点语义决定。
  */
 export interface ReadOpts { container: string; expand?: TargetArg; wait?: number }
@@ -173,7 +173,7 @@ export interface FoldOpts {
   ref?: number; ancestor?: number; note?: string; list?: boolean;
 }
 
-/** find:按文本(--text)或 selector(--selector)找元素,登记 ref 返回(追加,不重置)。
+/** find:按文本(--text)或 selector(--selector)找元素,登记 ref 返回(复用或追加,不重置)。
  * - text:整页穿透 shadow 搜"自身或后代文本含关键词"的元素;selector:document.querySelector(支持 `>>>` shadow 链)。
  * - ancestor:命中后向上爬 N 层到区域容器。all:收集全部命中而非首个。
  * - 返回 {ok, hits:[{ref, tag, text, line}]}(line 是该元素 formatView 的一行输出,含 [ref=N])。 */
@@ -227,12 +227,12 @@ async function runWithFeedback<T>(target: Target, doAction: () => Promise<T>, op
     const after = await list();
     const tabs = diffTabs(before, after);
     // 增量反馈先行。是否整页重载(真导航换 document)由注入侧 reloaded 判定,而非仅看 URL 变化:
-    // 锚点/历史跳转(URL 变但同 document)旧 DOM/ref 全有效,仍走增量;整页导航才整页 view 重建。
+    // 锚点/历史跳转(URL 变但同 document)旧 DOM/ref 全有效,仍走增量;整页导航才读取新 document 的整页 view。
     const fb = await invoke<FeedbackResult>(target, inject('feedback-collect'));
     const nav = tabs.navigated?.[0];
     if (nav && fb.reloaded) {
-      // 整页重载:旧 document/observer 已失效,增量(append ref)只会给 agent 一堆失效 ref;
-      // 改走整页 view(不带 ref/selector → __cdpRefs 从 0 重建),把新页整棵树给 agent 并注明。
+      // 整页重载:旧 document/observer 已失效,增量反馈只会给 agent 一堆旧 document 的失效 ref;
+      // 改走新 document 的整页 view；新页面全局天然是新登记表，并非清空旧 document 的表。
       // 用新 URL 过滤 fold 规则:view 按 target.url 算 hostname+pathname,重载后必须用新地址
       // (target.id 不变、ws 不变,仍连同一页面,只覆盖 url 即可)。
       const v = await view({ ...target, url: nav.to });
@@ -241,7 +241,7 @@ async function runWithFeedback<T>(target: Target, doAction: () => Promise<T>, op
         feedback: {
           blocks: v.lines?.length ? [{ lines: v.lines, count: 1 }] : [],
           changes: [],
-          note: `页面已跳转: ${nav.from} → ${nav.to};旧页 DOM/ref 全部失效,以上为新页整页视图(ref 从 0 重建)`,
+          note: `页面已跳转: ${nav.from} → ${nav.to};旧页 DOM/ref 全部失效,以上为新 document 的整页视图(使用新登记表)`,
           tabs,
         },
       };

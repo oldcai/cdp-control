@@ -69,7 +69,7 @@ export function articleExpr(ref: number, ancestor?: number, ignoreLinks?: string
   return inject('article', { ref, ancestor, ignoreLinks });
 }
 
-/** read-content:展开再读的容器定位——按 container selector 重查正文容器,末尾追加登记,返回新 ref(展开重渲染替换元素则末尾追加)。 */
+/** read-content:展开再读的容器定位——按 container selector 重查正文容器,复用或追加登记,返回 ref(展开重渲染替换元素则追加)。 */
 export function readContentExpr(args: { container: string }): string {
   return inject('read-content', args);
 }

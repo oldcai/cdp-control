@@ -4,7 +4,7 @@
  * ref 的取法:window.__cdpRefs 是 view 遍历时登记的引用数组,index 即 view 输出的 [ref=i]。
  * --ancestor:按 ref 定位后向上爬 N 层父级再操作(把内容叶子抬到语义区域容器)。
  */
-import { climbAncestors, classifyRef, entryEl, entryParent, getRefs } from './find-root';
+import { climbAncestors, classifyRef, entryEl, entryParent, getRefs, refElement } from './find-root';
 import { buildView } from './view-core';
 import { markText, formatView } from './view-format';
 
@@ -13,10 +13,7 @@ export interface OperableArg { sel?: string; ref?: number; ancestor?: number }
 /** 解析操作目标:ref 命中返回登记的真实元素(可选再爬 ancestor 层);否则 document.querySelector(sel)。找不到返回 null。 */
 export function findTarget(arg: OperableArg): Element | null {
   if (arg.ref != null) {
-    const refs = getRefs();
-    const el = entryEl(refs ? refs[arg.ref] : undefined);
-    if (!(el instanceof Element)) return null;
-    return climbAncestors(el, arg.ancestor || 0);
+    return climbAncestors(refElement(arg.ref), arg.ancestor || 0);
   }
   return arg.sel ? document.querySelector(arg.sel) : null;
 }

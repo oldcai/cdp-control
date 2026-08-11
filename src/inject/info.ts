@@ -10,7 +10,7 @@
  * 决策权交还 agent —— 它看清 #biliMainHeader 在第 3 层,直接 `fold add www.bilibili.com #biliMainHeader 顶栏`。
  */
 import { setResult } from './lib/result';
-import { refElement, climbAncestors } from './lib/find-root';
+import { refElement, climbAncestors, registerRef } from './lib/find-root';
 import { genSel } from './lib/genSel';
 import { notFoundResult, type OperableArg } from './lib/find';
 import { isSemanticDataValue } from './lib/view-utils';
@@ -22,21 +22,24 @@ declare const __CDP_ARG__: InfoArgs;
 const MAX_CLASS_LEN = 80;
 
 /** 提取一层的紧凑描述(纯 DOM 读,无副作用)。 */
-function describe(el: Element): {
-  tag: string; id?: string; classes?: string[]; dataAttrs?: Record<string, string>;
+type ElementDescription = {
+  tag: string; id?: string; classes?: string[] | string; dataAttrs?: Record<string, string>;
   aria?: string; role?: string; title?: string;
-} {
+};
+
+function describe(el: Element): ElementDescription {
   const tag = el.tagName.toLowerCase();
-  const out: any = { tag };
+  const out: ElementDescription = { tag };
   if (el.id) out.id = el.id;
-  const classList = (el as any).classList;
+  const classList = el.classList;
   if (classList && classList.length) {
     // 原样保留顺序;过长截断标 …
-    const all = Array.from(classList as Iterable<string>);
+    const all: string[] = [];
+    for (let i = 0; i < classList.length; i++) all.push(classList.item(i) || '');
     const joined = all.join(' ');
     out.classes = joined.length > MAX_CLASS_LEN ? joined.slice(0, MAX_CLASS_LEN) + '…' : all;
   }
-  const attrs = (el as any).attributes;
+  const attrs = el.attributes;
   if (attrs) {
     // 内容模式识别:凡 data-* 且值像语义锚点(短、非 JSON/url 编码)就采,不靠属性名白名单——
     // 不同站点把语义放不同 data-*(data-tooltip/data-testid/data-qa/...),白名单永远追不全。
@@ -73,25 +76,11 @@ function describe(el: Element): {
   }
 
   const depthStart = 0; // html = depth 0
-  // 反查元素在 __cdpRefs 的 ref 号;未登记返回 -1。
-  const refOf = (e: Element): number => {
-    const refs = (globalThis as any).__cdpRefs;
-    if (!Array.isArray(refs)) return -1;
-    for (let i = 0; i < refs.length; i++) {
-      const entry = refs[i];
-      if (entry && (entry.el ?? entry) === e) return i;
-    }
-    return -1;
-  };
   // 逐层补 ref(根→叶):已登记的复用(view 建树时登记的隐藏容器 ref);未登记的(局部 view 的祖先缺登记)
-  // 按"最近已登记祖先"为 parentRef 现场追加,保证 info 列出的每层都有可用 [ref=N]。
+  // 按"最近已登记祖先"刷新 parentRef,首次见到才追加,保证 info 列出的每层都有可用 [ref=N]。
   let lastRef: number | null = null;
   const chainRef = chain.map((e, i) => {
-    let r = refOf(e);
-    if (r < 0) {
-      r = (globalThis as any).__cdpRefs.length;
-      (globalThis as any).__cdpRefs.push({ el: e, parentRef: lastRef });
-    }
+    const r = registerRef(e, lastRef);
     lastRef = r;
     return { depth: depthStart + i, ref: r, ...describe(e) };
   });

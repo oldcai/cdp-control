@@ -9,7 +9,7 @@ description: 控制本地浏览器——列出/打开/关闭/导航页面、提�
 
 `cdp-control` 连 Chrome/Edge 的 CDP 端口(默认 9222),取代 chrome-devtools MCP。核心价值:**能看到并操作手动打开的 tab**(MCP 因 Puppeteer attach 竞态会漏看)。
 
-**核心模型**:`view` 感知(整页 body 建紧凑树+结构,给可操作元素标 `[ref=i]`);`ref` 是操作索引(会话句柄,存 `window.__cdpRefs`,刷新失效、每次 view 重排)。
+**核心模型**:`view` 感知(整页 body 建紧凑树+结构,给可操作元素标 `[ref=i]`);`ref` 是当前 document 的稳定操作索引(存 `window.__cdpRefs`,同一元素重复 view 保号,导航/刷新换 document 后失效)。
 
 铁律:
 - `list`/`open` 自动确保浏览器就绪(CDP 未起自动启动)。
@@ -58,7 +58,7 @@ cdp-control run "./scripts/你的脚本.js"
 **操作(ref)**:
 - 整页 view 里 `[shadow]` 占位行(如 `bili-comments[shadow] [ref=N]`)是 Web Component 容器,内容在 shadow DOM,整页只占位不深入。**看内容用 `view N`**;首屏空壳则 `view N --scroll-to-load`。CSS 穿不透 shadow,操作一律用 ref。
 - 操作优先 `[ref=i]`(`click i`,零 selector,shadow 内也能定位;目标全数字即 ref)。
-- ref 是会话句柄,页面刷新失效、每次 view 重建。**每回合先 view 拿 ref 再操作**。
+- ref 在当前 document 内一经印发就不换指向；重复整页/局部 view 会复用旧号,新元素才追加。导航/刷新换 document 后旧 ref 失效,此时重新 view。
 
 **区域定位(想 view 一块"语义区域")**:
 - 同会话:`view <n> --ancestor <k>`——拿区域内任一叶子 ref 向上爬 k 层到容器。
@@ -91,7 +91,7 @@ cdp-control run "./scripts/你的脚本.js"
 - **内容**:`页面变化 · 新增内容:`(重复块标 `(重复 N 次,已折叠)`)、`页面变化 · 文本变化:`(逐条 `旧 → 新`)。observer **穿透 shadow**、**跳过 video/audio/canvas 子树与连续播放时间戳**(01:55→01:56 折叠,不淹没点赞数等真变化)。操作行同附 `，该元素的 selector 为: <唯一selector>`,后续优先用 selector 而非 ref。
 - **tab**:操作前后 diff,点 `target=_blank` 新开 tab 直接报 `新开 tab: <title> <url> [<targetId>]`,直接 `view --target <targetId>` 继续。
 - `--no-feedback`:关闭。`--feedback-delay <ms>`:自定义等待(默认 1000)。
-- **反馈树 ref 是增量号,不顶旧 ref**:新增内容 `[ref]` 从当前已有号递增,可操作新增内容,**原整页 ref 仍有效**。增量 ref 适合即时 click/fill;要 `view <ref>` 回看先整页 view。
+- **反馈树 ref 不顶旧 ref**:已登记元素复用旧号,首次见到的新增内容从表尾追加,可操作新增内容,**原整页 ref 仍有效**。
 - 脚本:`cdp.click(target, arg, {noFeedback?, feedbackDelay?})` → `{ok, tag, feedback:{lines, summary, tabs:{opened, closed}}}`。
 
 ## ref 失效自动自愈(所有 ref 命令)

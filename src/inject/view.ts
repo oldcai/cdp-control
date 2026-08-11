@@ -11,6 +11,7 @@ import { setResult } from './lib/result';
 import { markText, formatView } from './lib/view-format';
 import { buildView } from './lib/view-core';
 import { findRoot, refElement, climbAncestors } from './lib/find-root';
+import { notFoundResult, type OperableArg } from './lib/find';
 import { installProbe } from './lib/probe';
 import type { ViewArgs } from './lib/arg';
 
@@ -19,22 +20,19 @@ declare const __CDP_ARG__: ViewArgs;
 // 整段包成 async(通过 setResult 传 promise,footer await):支持 --scroll-to-load 先异步滚动再建视图。
 setResult((async () => {
   // 装只读探针 __cdpProbe(refOf/refOfSelector/text):recipe 约定先 view 建树再 eval,故随 view
-  // 注入即保证可用;探针只查已建树 __cdpRefs、绝不注册。幂等(页面全局已存在则跳过)。
+  // 注入即保证可用;探针只查已建树 __cdpRefs、绝不注册；每次刷新实现以兼容旧页面残留。
   installProbe();
-  // 锚点互斥:ref 优先(读上一次 view 登记的 __cdpRefs,须在下方清空表之前解析),
+  // 锚点互斥:ref 优先(读上一次 view 登记的 __cdpRefs),
   // 其次 selector,缺省 body。--ancestor 为统一爬父修饰符,对任一锚点生效。
   let root: Element | null;
   if (__CDP_ARG__.ref != null) {
     root = climbAncestors(refElement(__CDP_ARG__.ref), __CDP_ARG__.ancestor);
-    if (!root || root.nodeType !== 1) return setResult({ ok: false, err: `ref=${__CDP_ARG__.ref} 无效或已失效(ref 是会话句柄,页面刷新后失效;需先重新 view 拿到新 ref)` });
+    if (!root || root.nodeType !== 1) return setResult(notFoundResult({ ref: __CDP_ARG__.ref } as OperableArg));
   } else {
     root = climbAncestors(findRoot(__CDP_ARG__.selector), __CDP_ARG__.ancestor);
     if (!root || root.nodeType !== 1) return setResult({ ok: false, err: '未找到匹配的根节点(selector 未命中)' });
   }
-  // 全局 ref 登记表:整页 view(ref/selector 均缺省)才重置,从 0 重新编号,index 即输出里的 [ref=i];
-  // 局部 view(<ref>/<selector>)只追加(增量号),保住整页已登记的其他 ref 不被顶掉(view 151 后再 view 152 仍有效)。
-  const resetRefs = __CDP_ARG__.ref == null && !__CDP_ARG__.selector;
-  if (resetRefs) (globalThis as any).__cdpRefs = [];
+  // 全局 ref 登记表不清空：整页/局部 view 都复用旧元素号码，新元素只追加，已印发 ref 不换指向。
   // --scroll-to-load:滚动触发懒加载(评论区等首屏外的内容),再建视图。三种模式(默认行为不变):
   // (1) 默认(无 scrollPages/scrollTo):向下/向上各一屏后回原位,固定距离触发当前位置上下懒加载。
   //     刻意不大范围滚多屏再回顶——那会拉飞视口、让 agent 在已展开长内容页时丢失当前位置(曾踩坑)。

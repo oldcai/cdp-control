@@ -41,8 +41,8 @@ export interface InfoArgs { ref: number; ancestor?: number }
  * ignoreLinks:持久链接黑名单模式数组(Node 侧 ignore-links.ts 读后传入),命中只留文本、去 URL。 */
 export interface ArticleArgs { ref: number; ancestor?: number; ignoreLinks?: string[] }
 
-/** read-content:展开再读的容器定位——按 container selector 重查正文容器,末尾追加登记进 __cdpRefs
- * (展开重渲染替换元素,旧 ref 失效),返回新 ref。纯同步(点击/等待由 Node 侧分开编排)。 */
+/** read-content:展开再读的容器定位——按 container selector 重查正文容器,统一复用或追加登记进 __cdpRefs
+ * (展开重渲染替换元素,旧 ref 失效),返回 ref。纯同步(点击/等待由 Node 侧分开编排)。 */
 export interface ReadContentArgs { container: string }
 
 /** read:控制台日志过滤(level 数组;since 毫秒时间戳)。 */
