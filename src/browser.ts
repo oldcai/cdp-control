@@ -115,6 +115,16 @@ async function launchReady(exe: string, args: string[], port: number, userData: 
   return null;
 }
 
+/**
+ * 启动失败最常见的真因不是"没浏览器",而是**同一 user-data 已被另一个浏览器实例占用**:
+ * Chrome/Edge 单例机制会让新进程把参数转交给旧实例后自己退出 —— 于是新端口上永远没人应答。
+ * 提示里直接给出可执行的下一步,别让人以为浏览器没装。
+ */
+function busyProfileHint(what: string, userData: string, cfgPath: string): string {
+  return `${what}。\n最常见原因:已有浏览器实例占着同一 user-data(${userData}),单例机制让新进程直接退出。`
+    + `\n处理:先 cdp-control kill(或手动关掉那个浏览器窗口)再重试;或编辑 ${cfgPath} 换 userData/port。`;
+}
+
 /** 冷启动:有配置则用(坏则抛,不兜底);无配置则 bootstrap 发现并写配置。 */
 async function coldStart(): Promise<{ kind: BrowserKind; exe: string; userData: string; port: number }> {
   const p = browserConfigPath();
@@ -128,7 +138,7 @@ async function coldStart(): Promise<{ kind: BrowserKind; exe: string; userData: 
     mkdirSync(cfg.userData, { recursive: true });
     const want = await pickPort(cfg.port);
     const port = await launchReady(cfg.exe, cfg.args, want, cfg.userData);
-    if (port == null) throw new Error(`浏览器启动超时(${cfg.exe} 在端口 ${want} 未就绪)。请检查 ${p} 的 exe/args/port`);
+    if (port == null) throw new Error(busyProfileHint(`浏览器启动超时(${cfg.exe} 在端口 ${want} 未就绪)`, cfg.userData, p));
     // 端口漂了(被占/没就绪换口)就回写配置,下次直接对
     if (port !== cfg.port) { writeConfigAtomic(p, { ...cfg, port }); console.error(`已把端口 ${port} 写回 ${p}`); }
     maybeSpawnDaemon();
@@ -153,7 +163,7 @@ async function coldStart(): Promise<{ kind: BrowserKind; exe: string; userData: 
   }
   // 区分两种失败:一个候选都不存在 vs 存在但都没在端口上就绪(后者给出试过谁,别让人以为没装浏览器)
   throw new Error(tried.length
-    ? `找到浏览器但都没能在端口 ${want} 就绪(试过: ${tried.join(', ')})。可手动创建 ${p} 指定 exe/args/port`
+    ? busyProfileHint(`找到浏览器但都没能在端口 ${want} 就绪(试过: ${tried.join(', ')})`, userData, p)
     : `未找到可用浏览器。可手动创建 ${p} 指定 exe/args`);
 }
 
