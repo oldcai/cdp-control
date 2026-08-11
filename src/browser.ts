@@ -101,14 +101,19 @@ function loadConfigOrNull(): BrowserConfig | null {
  * 定端口:want 空闲就用它;被占则分两种,回 `{port}` 要拉起、回 `{reused}` 表示别人已经起好了直接用。
  * ensureBrowser 探空之后、走到这里之前,另一个并发的 cdp-control 可能刚把浏览器绑上端口(TOCTOU
  * 窗口)。这时换口会踩 Chrome 单例:新进程把参数转交给旧实例后自己退出,我们在新端口上白等两轮超时。
- * 故"刚才还空、现在被占"(`knownBusy=false`)先 probeReadySoon 等它应答,就绪即复用;
- * ensureBrowser 已确认是外人占着(`knownBusy=true`,那边已经等过一轮)则不重复等,直接换口——
- * 不换的话 Chrome 会静默绑到 [::1],客户端连 127.0.0.1 永远超时。只定端口不写配置(配置由调用方在真起来之后写)。
+ * 故这个端口**没被确认过是外人占着**时先 probeReadySoon 等它应答,就绪即复用。
+ *
+ * `busyProbed` 是"已确认被外人占着、且已经等过一轮 3s 的那个端口",**必须带端口而不是布尔**:
+ * coldStart 会重读 browser.json,并发进程可能已把端口回写成新的,布尔值就跟着张冠李戴——
+ * 拿旧端口的结论去跳过新端口的探测,正好对着刚就绪的浏览器换口撞单例(2026-08 m2 稳定复现)。
+ * 只有 `busyProbed === want` 才免探;不同端口一律重新等,那点等待只在冷启动付一次。
+ * 换口的理由照旧:不换的话 Chrome 会静默绑到 [::1],客户端连 127.0.0.1 永远超时。
+ * 只定端口不写配置(配置由调用方在真起来之后写)。
  */
-async function pickPort(want: number, knownBusy: boolean): Promise<{ port: number } | { reused: string }> {
+async function pickPort(want: number, busyProbed: number | null): Promise<{ port: number } | { reused: string }> {
   setPort(want);
   if (await portFreeOn(want, HOST)) return { port: want };
-  if (!knownBusy) {
+  if (busyProbed !== want) {
     const p = await probeReadySoon();
     if (p.ready) { console.error(`端口 ${want} 上的浏览器已由并发进程拉起,直接复用`); return { reused: p.browser || '未知浏览器' }; }
   }
@@ -149,10 +154,11 @@ function busyProfileHint(what: string, userData: string, cfgPath: string): strin
 
 /**
  * 冷启动:有配置则用(坏则抛,不兜底);无配置则 bootstrap 发现并写配置。
- * `knownBusy`=调用方已确认端口被外人占着(已等过一轮),pickPort 不必再等。
+ * `busyProbed`=调用方已确认被外人占着(已等过一轮)的**那个端口**;本函数重读的配置端口若与它不同
+ * (并发进程回写过),pickPort 会重新探,不复用旧结论。
  * 返回 `{reused}` 表示端口上的浏览器是并发进程刚拉起的,本进程什么都不用启。
  */
-async function coldStart(knownBusy: boolean): Promise<ColdResult> {
+async function coldStart(busyProbed: number | null): Promise<ColdResult> {
   const p = browserConfigPath();
 
   if (existsSync(p)) {
@@ -162,7 +168,7 @@ async function coldStart(knownBusy: boolean): Promise<ColdResult> {
     if (!cfg) throw new Error(`浏览器启动配置损坏,不做兜底,请编辑 ${p}`);
     if (!existsSync(cfg.exe)) throw new Error(`browser.json 的 exe 不存在: ${cfg.exe}\n请编辑 ${p}`);
     mkdirSync(cfg.userData, { recursive: true });
-    const pick = await pickPort(cfg.port, knownBusy);
+    const pick = await pickPort(cfg.port, busyProbed);
     if ('reused' in pick) return pick;
     const want = pick.port;
     const port = await launchReady(cfg.exe, cfg.args, want, cfg.userData);
@@ -174,7 +180,7 @@ async function coldStart(knownBusy: boolean): Promise<ColdResult> {
   }
 
   // 缺失 → bootstrap:逐个候选尝试,首个能拉起者写配置(userData 用默认值,port 取首个空闲)
-  const pick = await pickPort(DEFAULT_PORT, knownBusy);
+  const pick = await pickPort(DEFAULT_PORT, busyProbed);
   if ('reused' in pick) return pick;
   const want = pick.port;
   const userData = DEFAULT_USER_DATA();
@@ -206,11 +212,14 @@ export async function ensureBrowser(): Promise<EnsureResult> {
   // 端口上有人、但还没应答 /json/version:很可能是**另一个 cdp-control 进程刚把浏览器拉起来**。
   // 这时抢着换端口会踩 Chrome 单例:同一个 user-data 的新进程转交参数后直接退出,自己却在新端口上空等到超时。
   // 先给它一小段时间应答;真是无关进程占着的话(如用户自己的浏览器),这点等待只在冷启动付一次。
-  let knownBusy = false;
-  if (!probe.ready && !(await portFreeOn(Number(PORT), HOST))) { knownBusy = true; probe = await probeReadySoon(); }
+  // 记下"确认被外人占着、并等过一轮"的**那个端口**(不是布尔):coldStart 会重读配置,端口可能已被
+  // 并发进程回写成别的,布尔值会张冠李戴地免掉新端口的探测。
+  const probed = Number(PORT);
+  let busyProbed: number | null = null;
+  if (!probe.ready && !(await portFreeOn(probed, HOST))) { busyProbed = probed; probe = await probeReadySoon(); }
   if (probe.ready) return { ready: true, started: false, browser: probe.browser, userData: cfg?.userData };
-  // 端口"刚才空、进 coldStart 前被并发进程绑上"的 TOCTOU 窗口由 pickPort 兜住(knownBusy=false 时它会再等一轮)
-  const info = await coldStart(knownBusy);
+  // 端口"刚才空、进 coldStart 前被并发进程绑上"的 TOCTOU 窗口由 pickPort 兜住(那个端口没被确认占用时它会再等一轮)
+  const info = await coldStart(busyProbed);
   if ('reused' in info) return { ready: true, started: false, browser: info.reused, userData: cfg?.userData };
   const name = `${info.kind} ${info.exe}`;
   console.error(`已自动启动浏览器: ${name} (端口 ${info.port})`);
