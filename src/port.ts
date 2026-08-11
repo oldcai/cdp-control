@@ -5,22 +5,140 @@
  * 而是静默退到 [::1]:<port>,客户端连 127.0.0.1 永远拿不到 /json/version,表现为"启动超时/
  * 未找到可用浏览器"。故启动前先探空、被占就换端口。
  */
-import { createServer } from 'node:net';
+import { createServer, connect, isIP } from 'node:net';
+import { lookup } from 'node:dns/promises';
 
-/** host:port 能否绑定(能绑=空闲)。 */
-export function portFree(port: number, host = '127.0.0.1'): Promise<boolean> {
+/** 绑定探测:绑上了返回 `'free'`,否则返回错误码(`EADDRINUSE`/`EACCES`/`EADDRNOTAVAIL`/…)。 */
+export function probeBind(port: number, host = '127.0.0.1'): Promise<string> {
   return new Promise(resolve => {
     const srv = createServer();
-    srv.once('error', () => resolve(false));
-    srv.once('listening', () => srv.close(() => resolve(true)));
+    srv.once('error', (e: NodeJS.ErrnoException) => resolve(e?.code || 'UNKNOWN'));
+    srv.once('listening', () => srv.close(() => resolve('free')));
     srv.listen({ port, host, exclusive: true });
   });
 }
 
-/** 从 start 起找第一个空闲端口(含 start);span 内全被占则抛清晰错。 */
+/**
+ * "这个端口上**有没有别人**"(宽松语义,回答 ensureBrowser 的"配置端口是不是被占了")。
+ * **只有 `EADDRINUSE` 才算被占**:绑不上的其它原因(地址不属于本机 EADDRNOTAVAIL、低端口 EACCES 等)
+ * 说明"我们判断不了",这时不该谎称被占而去换端口——换了照样起不来,还把真因藏了。
+ * **别拿它挑新端口**:"不是被占"不等于"我们能绑"(见 `bindable`/`findFreePort`)。
+ */
+export async function portFree(port: number, host = '127.0.0.1'): Promise<boolean> {
+  return (await probeBind(port, host)) !== 'EADDRINUSE';
+}
+
+/**
+ * "这个端口**我们确实能绑**"(严格语义,挑启动端口用)。宽松的 `portFree` 会把 `EACCES`
+ * (win 的 excluded port range、无权限的低端口)当"空闲",于是 `findFreePort` 选中一个谁都绑不上的
+ * 端口、浏览器等到超时,还可能在同一受限区间里再选一次。故挑端口必须要求**真的绑上**。
+ * 例外只有一个:回环地址上"整个地址族没开"(关了 IPv6 的机器探 `::1`)—— 那地址压根不是端点,
+ * 跳过它,否则 `CDP_HOST=localhost` 在这类机器上会挑不出任何端口(与 `addrUnusable` 同一判定)。
+ */
+async function bindable(port: number, addrs: string[]): Promise<{ ok: true } | { ok: false; code: string }> {
+  for (const a of addrs) {
+    const r = await probeBind(port, a);
+    if (r === 'free') continue;
+    if (r !== 'EADDRINUSE' && addrUnusable(a, r)) continue;
+    return { ok: false, code: r };
+  }
+  return { ok: true };
+}
+
+/**
+ * host → 应逐个探测的地址集合(异步,可能查 DNS):数值地址/`localhost` 走 `hostAddrs` 不查;
+ * 其它主机名 `dns.lookup all:true` 拿**全部**地址——主机名只 `listen` 一次会漏:Node 对主机名
+ * 只绑首个解析结果,端口在另一个地址上被占时照样报"空闲",客户端却可能顺着那个地址连到无关进程
+ * (与 `localhost` 特判同一类问题,这里推广到任意主机名)。解析失败原样返回,listen/connect
+ * 自己会报错,维持"判断不了"语义。`lk` 可注入,单测不打真 DNS。
+ */
+export async function resolveHostAddrs(host: string, lk: typeof lookup = lookup): Promise<string[]> {
+  const addrs = hostAddrs(host);
+  if (addrs.length > 1 || isIP(addrs[0])) return addrs;
+  try {
+    const r = await lk(addrs[0], { all: true });
+    return r.length ? r.map(a => a.address) : addrs;
+  } catch { return addrs; }
+}
+
+async function allFree(port: number, addrs: string[]): Promise<boolean> {
+  for (const a of addrs) if (!(await portFree(port, a))) return false;
+  return true;
+}
+
+/**
+ * 端口对**我们要连的那个 host** 是否可用:host 解析出的每个地址都要能绑
+ * (`localhost` = 两个回环都得空)。只探 127.0.0.1 会漏:CDP_HOST=localhost 且只有 `[::1]:port`
+ * 被别人占着时,IPv4 探测报"空闲",浏览器绑上 IPv4,客户端却可能顺着 ::1 去问那个无关进程。
+ */
+export async function portFreeOn(port: number, host = '127.0.0.1'): Promise<boolean> {
+  return allFree(port, await resolveHostAddrs(host));
+}
+
+/** 本机整个地址族没开时,连它得到的错误码(IPv6 关掉的机器上探 `::1` 就是这些)。 */
+const FAMILY_OFF = new Set(['EAFNOSUPPORT', 'EPFNOSUPPORT', 'ENETUNREACH', 'EADDRNOTAVAIL', 'EHOSTUNREACH', 'EINVAL']);
+
+/** 回环地址?(它没有"网络中间环节",连不上只可能是本机这一族没开) */
+function isLoopback(a: string): boolean {
+  return a === '::1' || a === '::ffff:127.0.0.1' || /^127\./.test(a);
+}
+
+/**
+ * 探测失败该算"这地址在本机压根不是个端点"(跳过)还是"判断不了"(unknown)。
+ * **只对回环放宽**:`localhost` 硬带的 `::1` 在关了 IPv6 的机器上必然报 FAMILY_OFF,那不是
+ * "状态未知"而是"这地址不存在",不该把已空闲的端口报成 stillUp。远端地址不可达则**仍算未知**——
+ * 那可能只是网络断了、对面 CDP 还活着,kill 绝不能因此谎报成功。
+ */
+export function addrUnusable(addr: string, code: string): boolean {
+  return isLoopback(addr) && FAMILY_OFF.has(code);
+}
+
+/**
+ * 端点是否还有人应答(connect 探测,与客户端连 CDP 的语义一致):`true`=有人监听;
+ * `false`=每个地址都明确拒绝(ECONNREFUSED);`null`=判断不了(解析失败/远端不可达/超时,
+ * 或所有地址都在本机不可用——什么都没探明)。kill 的"诚实检查"用它——bind 探测(portFree)
+ * 只回答"我们能不能绑",对非本机的 CDP_HOST 一律 EADDRNOTAVAIL,会把活着的远程端点误判成"空闲"。
+ */
+export async function endpointAlive(port: number, host = '127.0.0.1', timeoutMs = 1000, lk: typeof lookup = lookup): Promise<boolean | null> {
+  let unknown = false, refused = false;
+  for (const a of await resolveHostAddrs(host, lk)) {
+    const r = await connectProbe(port, a, timeoutMs);
+    if (r === true) return true;
+    if (r === false) { refused = true; continue; }
+    if (!addrUnusable(a, r)) unknown = true;   // 本机不可用的回环地址:跳过,不污染结论
+  }
+  if (unknown) return null;
+  return refused ? false : null;               // 一个地址都没探明 → 判断不了,别报"没人"
+}
+
+/** 单地址 connect 探测:`true`=连上,`false`=ECONNREFUSED(明确没人),其余返回错误码字符串。 */
+function connectProbe(port: number, host: string, timeoutMs: number): Promise<boolean | string> {
+  return new Promise(resolve => {
+    const s = connect({ port, host });
+    const done = (v: boolean | string) => { s.destroy(); resolve(v); };
+    s.setTimeout(timeoutMs, () => done('ETIMEDOUT'));
+    s.once('connect', () => done(true));
+    s.once('error', (e: NodeJS.ErrnoException) => done(e?.code === 'ECONNREFUSED' ? false : (e?.code || 'UNKNOWN')));
+  });
+}
+
+/**
+ * 从 start 起找第一个**我们确实能绑**的端口(含 start);span 内一个都挑不出则抛清晰错。
+ * host 只解析一次(不然扫 50 个端口打 50 次 DNS)。错误信息区分"被别人占满"与"绑不上"
+ * (EACCES/受限区间/地址不属于本机),后者换端口也没用,得让用户看见真因。
+ */
 export async function findFreePort(start: number, span = 50, host = '127.0.0.1'): Promise<number> {
-  for (let p = start; p < start + span; p++) if (await portFree(p, host)) return p;
-  throw new Error(`端口 ${start}-${start + span - 1} 全被占用,无法启动浏览器`);
+  const addrs = await resolveHostAddrs(host);
+  let blocked = '';
+  for (let p = start; p < start + span; p++) {
+    const r = await bindable(p, addrs);
+    if (r.ok) return p;
+    if (r.code !== 'EADDRINUSE') blocked = r.code;
+  }
+  const range = `端口 ${start}-${start + span - 1}`;
+  throw new Error(blocked
+    ? `${range} 都无法绑定(host=${host},最后一个原因 ${blocked}),无法启动浏览器`
+    : `${range} 全被占用,无法启动浏览器`);
 }
 
 /** host → 数值地址集合。零依赖、不做 DNS,只归一化最常见的 `localhost`(它同时是两个回环地址)。 */
