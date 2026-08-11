@@ -22,3 +22,35 @@ export async function findFreePort(start: number, span = 50, host = '127.0.0.1')
   for (let p = start; p < start + span; p++) if (await portFree(p, host)) return p;
   throw new Error(`端口 ${start}-${start + span - 1} 全被占用,无法启动浏览器`);
 }
+
+/** 地址串(`127.0.0.1:9222` / `[::1]:9222`)的端口是否等于 port。 */
+function localPortIs(addr: string, port: number): boolean {
+  const i = addr.lastIndexOf(':');
+  return i >= 0 && addr.slice(i + 1) === String(port);
+}
+
+/**
+ * 解析 win `netstat -ano` 输出里**监听** port 的 pid(纯函数,可跨平台单测)。
+ * 只认 `LISTENING` 且本地地址端口精确匹配 —— 别把连上来的客户端(如本工具的 daemon)当浏览器。
+ */
+export function parseNetstatListeners(out: string, port: number): number[] {
+  const pids: number[] = [];
+  for (const line of out.split(/\r?\n/)) {
+    // 例:  TCP    127.0.0.1:9222         0.0.0.0:0              LISTENING       6634
+    const c = line.trim().split(/\s+/);
+    if (c.length < 5 || !/^TCP$/i.test(c[0]) || c[3] !== 'LISTENING' || !localPortIs(c[1], port)) continue;
+    const pid = Number(c[4]);
+    if (Number.isInteger(pid) && pid > 0 && !pids.includes(pid)) pids.push(pid);
+  }
+  return pids;
+}
+
+/** 解析 posix `lsof -t` 的 pid 列表(纯函数)。 */
+export function parsePids(out: string): number[] {
+  const pids: number[] = [];
+  for (const l of out.split(/\r?\n/)) {
+    const pid = Number(l.trim());
+    if (Number.isInteger(pid) && pid > 0 && !pids.includes(pid)) pids.push(pid);
+  }
+  return pids;
+}

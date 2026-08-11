@@ -11,7 +11,7 @@ import { getJson, setPort } from './transport';
 import { maybeSpawnDaemon } from './monitor';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
 import { browserConfigPath, parseBrowserConfig, defaultArgs, DEFAULT_PORT, DEFAULT_USER_DATA, type BrowserConfig } from './browser-config';
-import { portFree, findFreePort } from './port';
+import { portFree, findFreePort, parseNetstatListeners, parsePids } from './port';
 
 export interface EnsureResult { ready: boolean; started: boolean; browser?: string; userData?: string; }
 export interface KillResult { ok: boolean; port: number; reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken'; }
@@ -170,23 +170,18 @@ export async function ensureBrowser(): Promise<EnsureResult> {
   return { ready: true, started: true, browser: name, userData: info.userData };
 }
 
-/** 找出监听 port 的进程 pid(win 走 netstat,posix 走 lsof);无则 null。 */
-function pidOnPort(port: number): number | null {
+/**
+ * 找出**监听** port 的进程 pid 列表(win 走 netstat,posix 走 lsof)。
+ * 只认 LISTEN:`lsof -ti :port` 会把"连到该端口的客户端"(本工具的 monitor daemon 就是)
+ * 也列出来,取首个可能杀错人、浏览器还活着 → kill 报"未完全生效"(2026-08 m2 实测)。
+ */
+function pidsOnPort(port: number): number[] {
   try {
     if (process.platform === 'win32') {
-      const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' });
-      for (const line of out.split('\n')) {
-        if (line.includes(`:${port}`) && line.includes('LISTENING')) {
-          const pid = Number(line.trim().split(/\s+/).pop());
-          if (pid) return pid;
-        }
-      }
-    } else {
-      const out = execFileSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' }).trim();
-      if (out) return Number(out.split('\n')[0]);
+      return parseNetstatListeners(execFileSync('netstat', ['-ano'], { encoding: 'utf8' }), port);
     }
-  } catch {}
-  return null;
+    return parsePids(execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }));
+  } catch { return []; }
 }
 
 /** 强制结束浏览器进程:端口从 browser.json 读;无配置则 kill 不生效。返回是否已无监听。 */
@@ -197,8 +192,8 @@ export async function killBrowser(): Promise<KillResult> {
   try { cfg = parseBrowserConfig(readFileSync(p, 'utf8')); }
   catch { return { ok: false, port: 9222, reason: 'broken' }; }
   const port = cfg.port;
-  const pid = pidOnPort(port);
-  if (pid) {
+  const pids = pidsOnPort(port);
+  for (const pid of pids) {
     try {
       if (process.platform === 'win32') execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore' });
       else process.kill(pid, 'SIGKILL');
@@ -207,8 +202,8 @@ export async function killBrowser(): Promise<KillResult> {
   // 等端口真正释放(最多 ~3s),Edge 崩溃自启会重绑
   const t0 = Date.now();
   while (Date.now() - t0 < 3000) {
-    if (pidOnPort(port) === null) return { ok: true, port, reason: pid ? 'killed' : 'noProcess' };
+    if (!pidsOnPort(port).length) return { ok: true, port, reason: pids.length ? 'killed' : 'noProcess' };
     await new Promise(r => setTimeout(r, 300));
   }
-  return { ok: false, port, reason: pid ? 'stillUp' : 'noProcess' };
+  return { ok: false, port, reason: pids.length ? 'stillUp' : 'noProcess' };
 }

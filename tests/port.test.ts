@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:net';
-import { portFree, findFreePort } from '../src/port.ts';
+import { portFree, findFreePort, parseNetstatListeners, parsePids } from '../src/port.ts';
 
 function listen(port: number, host = '127.0.0.1'): Promise<Server> {
   return new Promise((resolve, reject) => {
@@ -37,4 +37,27 @@ test('findFreePort: span 内全被占抛清晰错', async () => {
   await assert.rejects(() => findFreePort(a, 2), /全被占用/);
   await close(s1);
   if (s2) await close(s2);
+});
+
+test('parseNetstatListeners: 只取 LISTENING 且本地端口精确匹配(win 路径,跨平台可测)', () => {
+  const out = [
+    '  Proto  Local Address          Foreign Address        State           PID',
+    '  TCP    127.0.0.1:9222         0.0.0.0:0              LISTENING       6634',
+    '  TCP    127.0.0.1:9222         127.0.0.1:52233        ESTABLISHED     7788', // 客户端连接,不算
+    '  TCP    127.0.0.1:52233        127.0.0.1:9222         ESTABLISHED     7788', // 远端才是 9222,不算
+    '  TCP    0.0.0.0:92220          0.0.0.0:0              LISTENING       9999', // 前缀相同的别的端口
+    '  TCP    [::1]:9222             [::]:0                 LISTENING       6634', // 同 pid 去重
+    '  UDP    127.0.0.1:9222         *:*                                    4242', // 非 TCP
+  ].join('\r\n');
+  assert.deepEqual(parseNetstatListeners(out, 9222), [6634]);
+});
+
+test('parseNetstatListeners: 多个监听进程都返回', () => {
+  const out = '  TCP    127.0.0.1:9223  0.0.0.0:0  LISTENING  11\n  TCP    [::1]:9223  [::]:0  LISTENING  22';
+  assert.deepEqual(parseNetstatListeners(out, 9223), [11, 22]);
+});
+
+test('parsePids: 解析 lsof -t 输出,去重去空', () => {
+  assert.deepEqual(parsePids('123\n456\n123\n\n'), [123, 456]);
+  assert.deepEqual(parsePids(''), []);
 });
