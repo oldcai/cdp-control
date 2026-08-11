@@ -5,7 +5,7 @@
  * 而是静默退到 [::1]:<port>,客户端连 127.0.0.1 永远拿不到 /json/version,表现为"启动超时/
  * 未找到可用浏览器"。故启动前先探空、被占就换端口。
  */
-import { createServer } from 'node:net';
+import { createServer, connect } from 'node:net';
 
 /**
  * host:port 能否绑定(能绑=空闲)。**只有 `EADDRINUSE` 才算被占**:绑不上的其它原因
@@ -29,6 +29,32 @@ export function portFree(port: number, host = '127.0.0.1'): Promise<boolean> {
 export async function portFreeOn(port: number, host = '127.0.0.1'): Promise<boolean> {
   for (const a of hostAddrs(host)) if (!(await portFree(port, a))) return false;
   return true;
+}
+
+/**
+ * 端点是否还有人应答(connect 探测,与客户端连 CDP 的语义一致):`true`=有人监听;
+ * `false`=每个地址都明确拒绝(ECONNREFUSED);`null`=判断不了(解析失败/不可达/超时)。
+ * kill 的"诚实检查"用它——bind 探测(portFree)只回答"我们能不能绑",对非本机的 CDP_HOST
+ * 一律 EADDRNOTAVAIL,会把活着的远程端点误判成"空闲"。
+ */
+export async function endpointAlive(port: number, host = '127.0.0.1', timeoutMs = 1000): Promise<boolean | null> {
+  let unknown = false;
+  for (const a of hostAddrs(host)) {
+    const r = await connectProbe(port, a, timeoutMs);
+    if (r === true) return true;
+    if (r === null) unknown = true;
+  }
+  return unknown ? null : false;
+}
+
+function connectProbe(port: number, host: string, timeoutMs: number): Promise<boolean | null> {
+  return new Promise(resolve => {
+    const s = connect({ port, host });
+    const done = (v: boolean | null) => { s.destroy(); resolve(v); };
+    s.setTimeout(timeoutMs, () => done(null));
+    s.once('connect', () => done(true));
+    s.once('error', (e: NodeJS.ErrnoException) => done(e?.code === 'ECONNREFUSED' ? false : null));
+  });
 }
 
 /** 从 start 起找第一个对 host 空闲的端口(含 start);span 内全被占则抛清晰错。 */

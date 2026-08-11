@@ -11,7 +11,7 @@ import { getJson, setPort, HOST, PORT } from './transport';
 import { maybeSpawnDaemon } from './monitor';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
 import { browserConfigPath, parseBrowserConfig, defaultArgs, DEFAULT_PORT, DEFAULT_USER_DATA, type BrowserConfig } from './browser-config';
-import { portFreeOn, findFreePort, parseNetstatListeners, parseLsofListeners } from './port';
+import { portFreeOn, findFreePort, endpointAlive, parseNetstatListeners, parseLsofListeners } from './port';
 
 export interface EnsureResult { ready: boolean; started: boolean; browser?: string; userData?: string; }
 export interface KillResult { ok: boolean; port: number; reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken'; }
@@ -233,9 +233,11 @@ export async function killBrowser(): Promise<KillResult> {
   while (Date.now() - t0 < 3000) {
     if (!pidsOnPort(port).length) {
       if (pids.length) return { ok: true, port, reason: 'killed' };
-      // 一个可归属的进程都没找到:端口上要是还有人在听,就别谎报成功。
-      // 会走到这里的典型情形:CDP_HOST 是个我们没法同步解析的主机名,或对方是我们不敢认的通配监听。
-      if (!(await portFreeOn(port, HOST))) return { ok: false, port, reason: 'stillUp' };
+      // 一个可归属的进程都没找到:问端点还有没有人应答(connect 探测,与客户端同语义)。
+      // 不能用 bind 探测:CDP_HOST 非本机时 bind 一律 EADDRNOTAVAIL,会把活着的远程端点谎报成 noProcess。
+      // 明确没人(每个地址都 ECONNREFUSED)才算 ok;有人应答或判断不了(远程/解析失败/超时)都如实报 stillUp。
+      const alive = await endpointAlive(port, HOST);
+      if (alive !== false) return { ok: false, port, reason: 'stillUp' };
       return { ok: true, port, reason: 'noProcess' };
     }
     await new Promise(r => setTimeout(r, 300));

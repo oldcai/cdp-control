@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:net';
-import { portFree, portFreeOn, findFreePort, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
+import { portFree, portFreeOn, findFreePort, endpointAlive, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
 
 function listen(port: number, host = '127.0.0.1'): Promise<Server> {
   return new Promise((resolve, reject) => {
@@ -72,6 +72,23 @@ test('portFreeOn: localhost 要两个回环都空;只占 [::1] 时 IPv4 探测�
 test('portFree: 只有 EADDRINUSE 算被占,绑不上的其它原因不算(否则会白换端口)', async () => {
   // 203.0.113.1 是 TEST-NET-3,不属于本机 → EADDRNOTAVAIL,不该被当成"端口被占"
   assert.equal(await portFree(19600, '203.0.113.1'), true);
+});
+
+test('endpointAlive: 有人监听 true,明确拒绝 false,判断不了 null(connect 探测,与 bind 语义分开)', async () => {
+  const port = await findFreePort(19700);
+  const srv = await listen(port);
+  assert.equal(await endpointAlive(port), true);                       // 有人应答
+  await close(srv);
+  assert.equal(await endpointAlive(port), false);                      // ECONNREFUSED = 明确没人
+  assert.equal(await endpointAlive(port, 'no-such-host.invalid', 500), null); // 解析不了 = 判断不了,不能当"没人"
+});
+
+test('endpointAlive: localhost 任一回环有人应答就算活着(kill 别把只占 [::1] 的当已释放)', async () => {
+  const port = await findFreePort(19800);
+  const s6 = await listen(port, '::1');
+  assert.equal(await endpointAlive(port, 'localhost'), true);
+  await close(s6);
+  assert.equal(await endpointAlive(port, 'localhost'), false);
 });
 
 test('addrServes: lsof 的 `*` 通配必须靠 t 字段(IPv4/IPv6)定族,拿不到就不认', () => {
