@@ -52,29 +52,50 @@ export async function portFreeOn(port: number, host = '127.0.0.1'): Promise<bool
   return allFree(port, await resolveHostAddrs(host));
 }
 
-/**
- * 端点是否还有人应答(connect 探测,与客户端连 CDP 的语义一致):`true`=有人监听;
- * `false`=每个地址都明确拒绝(ECONNREFUSED);`null`=判断不了(解析失败/不可达/超时)。
- * kill 的"诚实检查"用它——bind 探测(portFree)只回答"我们能不能绑",对非本机的 CDP_HOST
- * 一律 EADDRNOTAVAIL,会把活着的远程端点误判成"空闲"。
- */
-export async function endpointAlive(port: number, host = '127.0.0.1', timeoutMs = 1000): Promise<boolean | null> {
-  let unknown = false;
-  for (const a of await resolveHostAddrs(host)) {
-    const r = await connectProbe(port, a, timeoutMs);
-    if (r === true) return true;
-    if (r === null) unknown = true;
-  }
-  return unknown ? null : false;
+/** 本机整个地址族没开时,连它得到的错误码(IPv6 关掉的机器上探 `::1` 就是这些)。 */
+const FAMILY_OFF = new Set(['EAFNOSUPPORT', 'EPFNOSUPPORT', 'ENETUNREACH', 'EADDRNOTAVAIL', 'EHOSTUNREACH', 'EINVAL']);
+
+/** 回环地址?(它没有"网络中间环节",连不上只可能是本机这一族没开) */
+function isLoopback(a: string): boolean {
+  return a === '::1' || a === '::ffff:127.0.0.1' || /^127\./.test(a);
 }
 
-function connectProbe(port: number, host: string, timeoutMs: number): Promise<boolean | null> {
+/**
+ * 探测失败该算"这地址在本机压根不是个端点"(跳过)还是"判断不了"(unknown)。
+ * **只对回环放宽**:`localhost` 硬带的 `::1` 在关了 IPv6 的机器上必然报 FAMILY_OFF,那不是
+ * "状态未知"而是"这地址不存在",不该把已空闲的端口报成 stillUp。远端地址不可达则**仍算未知**——
+ * 那可能只是网络断了、对面 CDP 还活着,kill 绝不能因此谎报成功。
+ */
+export function addrUnusable(addr: string, code: string): boolean {
+  return isLoopback(addr) && FAMILY_OFF.has(code);
+}
+
+/**
+ * 端点是否还有人应答(connect 探测,与客户端连 CDP 的语义一致):`true`=有人监听;
+ * `false`=每个地址都明确拒绝(ECONNREFUSED);`null`=判断不了(解析失败/远端不可达/超时,
+ * 或所有地址都在本机不可用——什么都没探明)。kill 的"诚实检查"用它——bind 探测(portFree)
+ * 只回答"我们能不能绑",对非本机的 CDP_HOST 一律 EADDRNOTAVAIL,会把活着的远程端点误判成"空闲"。
+ */
+export async function endpointAlive(port: number, host = '127.0.0.1', timeoutMs = 1000, lk: typeof lookup = lookup): Promise<boolean | null> {
+  let unknown = false, refused = false;
+  for (const a of await resolveHostAddrs(host, lk)) {
+    const r = await connectProbe(port, a, timeoutMs);
+    if (r === true) return true;
+    if (r === false) { refused = true; continue; }
+    if (!addrUnusable(a, r)) unknown = true;   // 本机不可用的回环地址:跳过,不污染结论
+  }
+  if (unknown) return null;
+  return refused ? false : null;               // 一个地址都没探明 → 判断不了,别报"没人"
+}
+
+/** 单地址 connect 探测:`true`=连上,`false`=ECONNREFUSED(明确没人),其余返回错误码字符串。 */
+function connectProbe(port: number, host: string, timeoutMs: number): Promise<boolean | string> {
   return new Promise(resolve => {
     const s = connect({ port, host });
-    const done = (v: boolean | null) => { s.destroy(); resolve(v); };
-    s.setTimeout(timeoutMs, () => done(null));
+    const done = (v: boolean | string) => { s.destroy(); resolve(v); };
+    s.setTimeout(timeoutMs, () => done('ETIMEDOUT'));
     s.once('connect', () => done(true));
-    s.once('error', (e: NodeJS.ErrnoException) => done(e?.code === 'ECONNREFUSED' ? false : null));
+    s.once('error', (e: NodeJS.ErrnoException) => done(e?.code === 'ECONNREFUSED' ? false : (e?.code || 'UNKNOWN')));
   });
 }
 

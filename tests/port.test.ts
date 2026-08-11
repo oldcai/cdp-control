@@ -2,7 +2,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:net';
-import { portFree, portFreeOn, findFreePort, endpointAlive, resolveHostAddrs, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
+import { portFree, portFreeOn, findFreePort, endpointAlive, resolveHostAddrs, addrUnusable, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
+
+/** 假 dns.lookup:让单测能构造任意地址集合,不打真 DNS。 */
+const fakeLookup = (...addrs: string[]) =>
+  (async () => addrs.map(address => ({ address }))) as unknown as Parameters<typeof resolveHostAddrs>[1];
 
 function listen(port: number, host = '127.0.0.1'): Promise<Server> {
   return new Promise((resolve, reject) => {
@@ -97,11 +101,29 @@ test('resolveHostAddrs: 数值地址与 localhost 不查 DNS,其它主机名解�
   assert.deepEqual(await resolveHostAddrs('::1', noCall), ['::1']);
   assert.deepEqual(await resolveHostAddrs('localhost', noCall), ['127.0.0.1', '::1']);
   // 主机名解析出多个地址 → 全部返回(只 bind 首个会漏另一地址上的占用)
-  const two = (async () => [{ address: '::1' }, { address: '127.0.0.1' }]) as unknown as Parameters<typeof resolveHostAddrs>[1];
-  assert.deepEqual(await resolveHostAddrs('my-dev-box', two), ['::1', '127.0.0.1']);
+  assert.deepEqual(await resolveHostAddrs('my-dev-box', fakeLookup('::1', '127.0.0.1')), ['::1', '127.0.0.1']);
   // 解析失败 → 原样返回,维持"判断不了"语义(listen/connect 自己会报错)
   const boom = (async () => { throw new Error('ENOTFOUND'); }) as unknown as Parameters<typeof resolveHostAddrs>[1];
   assert.deepEqual(await resolveHostAddrs('no-such-host.invalid', boom), ['no-such-host.invalid']);
+});
+
+test('addrUnusable: 只对回环放宽"地址族没开",远端不可达仍算未知(kill 不许谎报)', () => {
+  // 关了 IPv6 的机器上探 localhost 硬带的 ::1 → 这地址不存在,不是"状态未知"
+  for (const code of ['EAFNOSUPPORT', 'EPFNOSUPPORT', 'ENETUNREACH', 'EADDRNOTAVAIL', 'EHOSTUNREACH', 'EINVAL']) {
+    assert.equal(addrUnusable('::1', code), true, code);
+  }
+  assert.equal(addrUnusable('127.0.0.1', 'EAFNOSUPPORT'), true);
+  assert.equal(addrUnusable('::1', 'ETIMEDOUT'), false);        // 回环超时是真反常 → 未知
+  assert.equal(addrUnusable('192.0.2.1', 'ENETUNREACH'), false); // 远端网络断了,对面可能还活着 → 未知
+  assert.equal(addrUnusable('10.0.0.5', 'EHOSTUNREACH'), false);
+});
+
+test('endpointAlive: 本机不可用的回环地址跳过,不把已空闲端口报成"判断不了"', async () => {
+  const port = await findFreePort(19900);
+  // ::1 位置换成本机绝不可用的回环族地址来模拟 IPv6 关闭:127.0.0.1 明确 ECONNREFUSED → 结论"没人"
+  assert.equal(await endpointAlive(port, 'h', 500, fakeLookup('127.0.0.1')), false);
+  // 掺一个远端不可达地址则必须退回 null(不能因为一个地址拒绝就说端点没了)
+  assert.equal(await endpointAlive(port, 'h', 500, fakeLookup('127.0.0.1', '203.0.113.9')), null);
 });
 
 test('addrServes: lsof 的 `*` 通配必须靠 t 字段(IPv4/IPv6)定族,拿不到就不认', () => {
