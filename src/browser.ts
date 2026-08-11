@@ -79,7 +79,9 @@ function resolveExe(exe: string): string | null {
 }
 
 function writeConfigAtomic(p: string, cfg: BrowserConfig): void {
-  const tmp = p + '.tmp';
+  // tmp 名带 pid:并发冷启动的两个进程都可能走到端口回写,共享固定 tmp 名会互踩
+  // (A 刚 write 完,B 把同名 tmp rename 走,A 的 rename ENOENT)。进程内调用是同步串行的,pid 足够唯一。
+  const tmp = `${p}.tmp.${process.pid}`;
   writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n');
   renameSync(tmp, p);
 }
