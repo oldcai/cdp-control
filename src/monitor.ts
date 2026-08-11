@@ -7,8 +7,9 @@ import { unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { pageWs, send, listTargets, resolve, evaluate, sleep, PORT, Target } from './transport';
-import { inject, readExpr } from './inject-loader';
+// Target 是纯类型,必须显式 `type`:否则 Node 的类型擦除留下一个运行时不存在的具名 import
+import { pageWs, send, listTargets, resolve, evaluate, sleep, PORT, type Target } from './transport.ts';
+import { inject, readExpr } from './inject-loader.ts';
 
 export const LOGS_PORT = Number(process.env.CDP_LOGS_PORT) || 9333;
 
