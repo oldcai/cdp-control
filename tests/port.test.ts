@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:net';
-import { portFree, findFreePort, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
+import { portFree, portFreeOn, findFreePort, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
 
 function listen(port: number, host = '127.0.0.1'): Promise<Server> {
   return new Promise((resolve, reject) => {
@@ -56,6 +56,22 @@ test('parseNetstatListeners: 同端口号不同地址族的两个进程,只取�
   const out = '  TCP    127.0.0.1:9223  0.0.0.0:0  LISTENING  11\n  TCP    [::1]:9223  [::]:0  LISTENING  22';
   assert.deepEqual(parseNetstatListeners(out, 9223), [11]);          // 默认 host=127.0.0.1,只认 IPv4 那个
   assert.deepEqual(parseNetstatListeners(out, 9223, '::1'), [22]);   // host 换成 IPv6 才认 [::1]
+});
+
+test('portFreeOn: localhost 要两个回环都空;只占 [::1] 时 IPv4 探测会漏', async () => {
+  const port = await findFreePort(19500);
+  const s6 = await listen(port, '::1');
+  assert.equal(await portFree(port, '127.0.0.1'), true);        // 只看 IPv4 会以为空闲
+  assert.equal(await portFreeOn(port, 'localhost'), false);     // 按 host 全地址判定才对
+  assert.equal(await portFreeOn(port, '::1'), false);
+  assert.equal(await portFreeOn(port, '127.0.0.1'), true);
+  await close(s6);
+  assert.equal(await portFreeOn(port, 'localhost'), true);
+});
+
+test('portFree: 只有 EADDRINUSE 算被占,绑不上的其它原因不算(否则会白换端口)', async () => {
+  // 203.0.113.1 是 TEST-NET-3,不属于本机 → EADDRNOTAVAIL,不该被当成"端口被占"
+  assert.equal(await portFree(19600, '203.0.113.1'), true);
 });
 
 test('addrServes: lsof 的 `*` 通配必须靠 t 字段(IPv4/IPv6)定族,拿不到就不认', () => {

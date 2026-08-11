@@ -7,11 +7,11 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
-import { getJson, setPort, HOST } from './transport';
+import { getJson, setPort, HOST, PORT } from './transport';
 import { maybeSpawnDaemon } from './monitor';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
 import { browserConfigPath, parseBrowserConfig, defaultArgs, DEFAULT_PORT, DEFAULT_USER_DATA, type BrowserConfig } from './browser-config';
-import { portFree, findFreePort, parseNetstatListeners, parseLsofListeners } from './port';
+import { portFreeOn, findFreePort, parseNetstatListeners, parseLsofListeners } from './port';
 
 export interface EnsureResult { ready: boolean; started: boolean; browser?: string; userData?: string; }
 export interface KillResult { ok: boolean; port: number; reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken'; }
@@ -52,6 +52,16 @@ async function probeReady(): Promise<{ ready: boolean; browser?: string }> {
   } catch { return { ready: false }; }
 }
 
+/** 反复探活到就绪或超时(用于"端口有人但可能是正在启动的浏览器")。 */
+async function probeReadySoon(ms = 3000): Promise<{ ready: boolean; browser?: string }> {
+  const t0 = Date.now();
+  for (;;) {
+    const p = await probeReady();
+    if (p.ready || Date.now() - t0 >= ms) return p;
+    await new Promise(r => setTimeout(r, 300));
+  }
+}
+
 function describeBrowser(s: string): string {
   if (/Edg\//i.test(s)) return `Microsoft Edge (${s})`;
   if (/Chrome\//i.test(s)) return `Google Chrome (${s})`;
@@ -89,8 +99,8 @@ function loadConfigOrNull(): BrowserConfig | null {
  * 客户端连 127.0.0.1 永远超时。只定端口不写配置(配置由调用方在真起来之后写)。
  */
 async function pickPort(want: number): Promise<number> {
-  if (await portFree(want)) { setPort(want); return want; }
-  const port = await findFreePort(want + 1);
+  if (await portFreeOn(want, HOST)) { setPort(want); return want; }
+  const port = await findFreePort(want + 1, 50, HOST);
   setPort(port);
   console.error(`⚠ 端口 ${want} 被其它进程占用(且不是可用的 CDP 端点),改用 ${port}`);
   return port;
@@ -105,7 +115,7 @@ async function launchReady(exe: string, args: string[], port: number, userData: 
   for (const p of [port, null]) {
     let target: number;
     if (p === null) {
-      try { target = await findFreePort(port + 1); } catch { return null; }
+      try { target = await findFreePort(port + 1, 50, HOST); } catch { return null; }
       console.error(`⚠ 端口 ${port} 上浏览器没能就绪,改用 ${target} 重试`);
     } else target = p;
     setPort(target);
@@ -172,7 +182,11 @@ export async function ensureBrowser(): Promise<EnsureResult> {
   // 先同步端口(有配置则读其 port,无则保持默认 9222),再探活
   const cfg = loadConfigOrNull();
   if (cfg?.userData) mkdirSync(cfg.userData, { recursive: true });
-  const probe = await probeReady();
+  let probe = await probeReady();
+  // 端口上有人、但还没应答 /json/version:很可能是**另一个 cdp-control 进程刚把浏览器拉起来**。
+  // 这时抢着换端口会踩 Chrome 单例:同一个 user-data 的新进程转交参数后直接退出,自己却在新端口上空等到超时。
+  // 先给它一小段时间应答;真是无关进程占着的话(如用户自己的浏览器),这点等待只在冷启动付一次。
+  if (!probe.ready && !(await portFreeOn(Number(PORT), HOST))) probe = await probeReadySoon();
   if (probe.ready) return { ready: true, started: false, browser: probe.browser, userData: cfg?.userData };
   const info = await coldStart();
   const name = `${info.kind} ${info.exe}`;
@@ -219,7 +233,7 @@ export async function killBrowser(): Promise<KillResult> {
       if (pids.length) return { ok: true, port, reason: 'killed' };
       // 一个可归属的进程都没找到:端口上要是还有人在听,就别谎报成功。
       // 会走到这里的典型情形:CDP_HOST 是个我们没法同步解析的主机名,或对方是我们不敢认的通配监听。
-      if (!(await portFree(port, HOST))) return { ok: false, port, reason: 'stillUp' };
+      if (!(await portFreeOn(port, HOST))) return { ok: false, port, reason: 'stillUp' };
       return { ok: true, port, reason: 'noProcess' };
     }
     await new Promise(r => setTimeout(r, 300));

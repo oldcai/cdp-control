@@ -7,19 +7,33 @@
  */
 import { createServer } from 'node:net';
 
-/** host:port 能否绑定(能绑=空闲)。 */
+/**
+ * host:port 能否绑定(能绑=空闲)。**只有 `EADDRINUSE` 才算被占**:绑不上的其它原因
+ * (地址不属于本机 EADDRNOTAVAIL、低端口 EACCES 等)说明"我们判断不了",这时不该谎称被占
+ * 而去换端口——换了照样起不来,还把真因藏了。
+ */
 export function portFree(port: number, host = '127.0.0.1'): Promise<boolean> {
   return new Promise(resolve => {
     const srv = createServer();
-    srv.once('error', () => resolve(false));
+    srv.once('error', (e: NodeJS.ErrnoException) => resolve(e?.code !== 'EADDRINUSE'));
     srv.once('listening', () => srv.close(() => resolve(true)));
     srv.listen({ port, host, exclusive: true });
   });
 }
 
-/** 从 start 起找第一个空闲端口(含 start);span 内全被占则抛清晰错。 */
+/**
+ * 端口对**我们要连的那个 host** 是否可用:host 解析出的每个地址都要能绑
+ * (`localhost` = 两个回环都得空)。只探 127.0.0.1 会漏:CDP_HOST=localhost 且只有 `[::1]:port`
+ * 被别人占着时,IPv4 探测报"空闲",浏览器绑上 IPv4,客户端却可能顺着 ::1 去问那个无关进程。
+ */
+export async function portFreeOn(port: number, host = '127.0.0.1'): Promise<boolean> {
+  for (const a of hostAddrs(host)) if (!(await portFree(port, a))) return false;
+  return true;
+}
+
+/** 从 start 起找第一个对 host 空闲的端口(含 start);span 内全被占则抛清晰错。 */
 export async function findFreePort(start: number, span = 50, host = '127.0.0.1'): Promise<number> {
-  for (let p = start; p < start + span; p++) if (await portFree(p, host)) return p;
+  for (let p = start; p < start + span; p++) if (await portFreeOn(p, host)) return p;
   throw new Error(`端口 ${start}-${start + span - 1} 全被占用,无法启动浏览器`);
 }
 
