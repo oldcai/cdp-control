@@ -14,6 +14,7 @@ import { loadLinkRules } from './ignore-links';
 import { normArg, type TargetArg } from './target-arg';
 import { diffTabs } from './tab-diff';
 import { ensureBrowser } from './browser';
+import { mouseClickEvents } from './click-events';
 
 /**
  * 统一执行注入脚本并解包结果契约:
@@ -254,9 +255,38 @@ async function runWithFeedback<T>(target: Target, doAction: () => Promise<T>, op
   }
 }
 
-/** 点击 target 页面上匹配 selector 或 ref 的元素(默认带操作后反馈)。 */
-export async function click(target: Target, arg: TargetArg, opts: FeedbackOpts = {}): Promise<any> {
-  return runWithFeedback(target, () => invoke(target, inject('click', normArg(arg))), opts);
+export interface ClickOpts extends FeedbackOpts { dom?: boolean }
+
+interface ClickPrepared {
+  ok: boolean;
+  refInvalid?: boolean;
+  recovered?: unknown;
+  x?: number;
+  y?: number;
+  tag?: string;
+  shadow?: boolean;
+  selector?: string | null;
+}
+
+/** 点击 target 页面上匹配 selector 或 ref 的元素。默认走 CDP 坐标输入;dom=true 显式走旧合成路径。 */
+export async function click(target: Target, arg: TargetArg, opts: ClickOpts = {}) {
+  return runWithFeedback(target, async () => {
+    const prepared = await invoke<ClickPrepared>(target, inject('click', {
+      ...normArg(arg),
+      dom: opts.dom || undefined,
+    }));
+    if (prepared.refInvalid || opts.dom) return prepared;
+    if (typeof prepared.x !== 'number' || typeof prepared.y !== 'number') {
+      throw new Error('点击坐标缺失');
+    }
+    const point = { x: prepared.x, y: prepared.y };
+    await withPage(target, async (ws) => {
+      for (const event of mouseClickEvents(point)) {
+        await send(ws, 'Input.dispatchMouseEvent', event);
+      }
+    });
+    return prepared;
+  }, opts);
 }
 
 /** 向 target 页面输入框填值(按 selector 或 ref,派发 input/change;默认带操作后反馈)。 */

@@ -158,7 +158,7 @@ targetCmd('view', '感知:命中 recipe 输出站点摘要,否则整页结构树
   });
 
 // 操作目标:位置参数 <target> 全数字→ref(配 --ancestor),否则视为 selector。见 api.TargetArg。
-function normTarget(t: string, ancestor: number | undefined): string | { ref: number; ancestor?: number } {
+function normTarget(t: string, ancestor: string | number | undefined): string | { ref: number; ancestor?: number } {
   if (/^\d+$/.test(t)) return { ref: Number(t), ancestor: ancestor != null ? Number(ancestor) : undefined };
   return t;
 }
@@ -265,8 +265,15 @@ function printInfoChain(r: any): void {
   if (r.suggested) console.log(`建议 selector: ${r.suggested}`);
 }
 
-feedbackOpt(targetOpt(targetCmd('click', '点击元素'))).argument('<target>', 'ref 序号或 selector(全数字=ref)')
-  .action(async (t: string, opts: any) => { const arg = normTarget(t, opts.ancestor); const r = await api.click(await needTarget(opts.target), arg, feedbackCfg(opts)); printAction(`已点击: ${argLabel(arg)} (${r.tag})`, r); printFeedback(r.feedback); });
+feedbackOpt(targetOpt(targetCmd('click', '点击元素')))
+  .argument('<target>', 'ref 序号或 selector(全数字=ref)')
+  .option('--dom', '显式使用旧 DOM 合成点击(isTrusted:false),仅作 fixed 布局逃生舱')
+  .action(async (t: string, opts: { ancestor?: string | number; target?: string; feedback?: boolean; feedbackDelay?: number; dom?: boolean }) => {
+    const arg = normTarget(t, opts.ancestor);
+    const r = await api.click(await needTarget(opts.target), arg, { ...feedbackCfg(opts), dom: !!opts.dom });
+    printAction(`已点击: ${argLabel(arg)} (${r.tag})`, r);
+    printFeedback(r.feedback);
+  });
 
 feedbackOpt(targetOpt(targetCmd('fill', '填输入框并触发 input/change'))).argument('<target>', 'ref 序号或 selector(全数字=ref)').argument('<value>', '值')
   .action(async (t: string, val: string, opts: any) => { const arg = normTarget(t, opts.ancestor); const r = await api.fill(await needTarget(opts.target), arg, val, feedbackCfg(opts)); printAction(`已填入: ${argLabel(arg)} ← ${val}`, r); printFeedback(r.feedback); });

@@ -6,8 +6,9 @@
  * 各入口按需声明自己的参数形状。
  */
 
-/** click/focus/hover:按 selector 或 ref(真实元素引用,穿透 shadow)定位并操作;ancestor 可选按 ref 定位后爬父。 */
-export interface FindArgs { sel?: string; ref?: number; ancestor?: number }
+/** click/focus/hover:按 selector 或 ref(真实元素引用,穿透 shadow)定位并操作;ancestor 可选按 ref 定位后爬父。
+ * dom 仅供 click 显式选择旧 DOM 合成路径。 */
+export interface FindArgs { sel?: string; ref?: number; ancestor?: number; dom?: boolean }
 
 /** fill:按 selector 或 ref 填值;ancestor 可选按 ref 定位后爬父。 */
 export interface FillArgs { sel?: string; ref?: number; ancestor?: number; value: string }
