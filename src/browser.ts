@@ -193,7 +193,7 @@ function pidsOnPort(port: number): number[] {
     if (process.platform === 'win32') {
       return parseNetstatListeners(execFileSync('netstat', ['-ano'], { encoding: 'utf8' }), port, HOST);
     }
-    return parseLsofListeners(execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpn'], { encoding: 'utf8' }), port, HOST);
+    return parseLsofListeners(execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpnt'], { encoding: 'utf8' }), port, HOST);
   } catch { return []; }
 }
 
@@ -215,7 +215,13 @@ export async function killBrowser(): Promise<KillResult> {
   // 等端口真正释放(最多 ~3s),Edge 崩溃自启会重绑
   const t0 = Date.now();
   while (Date.now() - t0 < 3000) {
-    if (!pidsOnPort(port).length) return { ok: true, port, reason: pids.length ? 'killed' : 'noProcess' };
+    if (!pidsOnPort(port).length) {
+      if (pids.length) return { ok: true, port, reason: 'killed' };
+      // 一个可归属的进程都没找到:端口上要是还有人在听,就别谎报成功。
+      // 会走到这里的典型情形:CDP_HOST 是个我们没法同步解析的主机名,或对方是我们不敢认的通配监听。
+      if (!(await portFree(port, HOST))) return { ok: false, port, reason: 'stillUp' };
+      return { ok: true, port, reason: 'noProcess' };
+    }
     await new Promise(r => setTimeout(r, 300));
   }
   return { ok: false, port, reason: pids.length ? 'stillUp' : 'noProcess' };
