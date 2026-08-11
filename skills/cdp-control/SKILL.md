@@ -88,11 +88,12 @@ cdp-control run "./scripts/你的脚本.js"
 ## 操作后自动反馈(click/fill/focus/hover/press-key 默认开启)
 
 操作后等约 1s,回报**新增内容 view + tab 变化**,一轮拿到结果:
+- **click 默认是真实输入**:先滚到元素中心并做视口/尺寸/遮挡命中校验,再经 CDP 依次派发 mouseMoved/mousePressed/mouseReleased(`isTrusted:true`)。被 overlay 遮挡会直接报错,不会静默退回合成事件;仅 fixed 布局确实无法用坐标点击时显式加 `--dom`。
 - **内容**:`页面变化 · 新增内容:`(重复块标 `(重复 N 次,已折叠)`)、`页面变化 · 文本变化:`(逐条 `旧 → 新`)。observer **穿透 shadow**、**跳过 video/audio/canvas 子树与连续播放时间戳**(01:55→01:56 折叠,不淹没点赞数等真变化)。操作行同附 `，该元素的 selector 为: <唯一selector>`,后续优先用 selector 而非 ref。
 - **tab**:操作前后 diff,点 `target=_blank` 新开 tab 直接报 `新开 tab: <title> <url> [<targetId>]`,直接 `view --target <targetId>` 继续。
 - `--no-feedback`:关闭。`--feedback-delay <ms>`:自定义等待(默认 1000)。
 - **反馈树 ref 是增量号,不顶旧 ref**:新增内容 `[ref]` 从当前已有号递增,可操作新增内容,**原整页 ref 仍有效**。增量 ref 适合即时 click/fill;要 `view <ref>` 回看先整页 view。
-- 脚本:`cdp.click(target, arg, {noFeedback?, feedbackDelay?})` → `{ok, tag, feedback:{lines, summary, tabs:{opened, closed}}}`。
+- 脚本:`cdp.click(target, arg, {noFeedback?, feedbackDelay?, dom?})` → `{ok, tag, feedback:{lines, summary, tabs:{opened, closed}}}`。
 
 ## ref 失效自动自愈(所有 ref 命令)
 
@@ -116,7 +117,7 @@ cdp-control run "./scripts/你的脚本.js"
 | `navigate <url>` | 导航 |
 | `eval "<js>"` | 执行 JS,返回 returnByValue 值 |
 | `view [<ref>] [--tree] [...]` | 感知:裸 `view`(无建树意图)命中站点 recipe 就输出聚焦摘要;否则整页文本+结构紧凑树。`--tree`/`[<ref>]`/`--selector-file`/`--visible-only`/`--scroll-*` 任一都**强制树**。首次必须完整 view(禁 --visible-only/截断)。命中 fold 规则输出 `▸ [ref=i] <备注>`;视区标 `[ref=i·屏]`;INPUT/TEXTAREA 显示 `[type=... value="..." placeholder="..."]` |
-| `click <target> [--ancestor <k>] [--no-feedback] [--feedback-delay <ms>]` | 点击(target 全数字=ref 否则 selector,穿透 shadow)。默认带反馈 |
+| `click <target> [--ancestor <k>] [--dom] [--no-feedback] [--feedback-delay <ms>]` | 默认坐标真实点击(target 全数字=ref 否则 selector,穿透 shadow);`--dom` 显式合成。默认带反馈 |
 | `fill <target> <值> [--ancestor <k>] [...]` | 填输入框并派发 input/change。默认带反馈 |
 | `focus <target> [--ancestor <k>] [...]` | 聚焦元素。默认带反馈 |
 | `get-focus` | 查看当前焦点元素在哪 |
@@ -190,7 +191,7 @@ await cdp.close(t);
 | `eval(target, js, timeout?)` | returnByValue 值 |
 | `view(target, {selector?,ref?,ancestor?})` | `{ok, lines}`(锚点互斥,折叠输出 `▸ [ref=i] <备注>`) |
 | `read(target, {container, expand?, wait?})` | 展开再读(recipe 用):按容器 selector 取**完整 Markdown**;expand 先展开再取全文。返回 `{ok, markdown, lines}` |
-| `click(target, selector \| {ref:12}, {noFeedback?,feedbackDelay?})` | `{ok, tag, feedback?}`;ref 失效自动自愈 |
+| `click(target, selector \| {ref:12}, {noFeedback?,feedbackDelay?,dom?})` | `{ok, tag, feedback?}`;默认坐标真实点击,ref 失效自动自愈 |
 | `fill(target, selector \| {ref:12}, value, opts?)` | `{ok, tag, feedback?}` |
 | `waitFor(target, selector, {timeout,interval})` | 布尔(超时抛错) |
 | `waitForFn(target, jsExpr, {timeout,interval})` | 布尔(**只吃同步布尔表达式**,别传 async/Promise) |
@@ -204,7 +205,7 @@ await cdp.close(t);
 ## 常见错误
 
 - eval 拿不到 → 已用 returnByValue+awaitPromise;跨域 iframe 用 `contentDocument`。
-- click 没生效 → `el.click()` 是合成事件;组件不吃就 eval 调组件方法,或截图后真坐标点击。
+- click 报`被 <tag.class> 遮挡`或`元素不可见/无尺寸` → 默认 trusted 坐标点击拒绝错误落点;先关闭 overlay/重新 view,仅 fixed 布局确实滚不进视口时显式 `click ... --dom`(合成事件,`isTrusted:false`)。
 - SPA 首屏慢,固定 sleep 不够 → 优先 `waitFor`/`waitForFn`。
 - 连接失败 → 先 `list` 自动启动;仍失败用 `CDP_HOST/CDP_PORT`。
 - `open` 失败/中断留 tab → `list` 核对后 `close`。
