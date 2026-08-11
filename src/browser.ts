@@ -86,15 +86,33 @@ function loadConfigOrNull(): BrowserConfig | null {
 /**
  * 定端口:want 空闲就用它;被别的进程占着(走到 coldStart 说明它不是可用 CDP 端点,
  * 否则 probeReady 早命中了)则换下一个空闲端口 —— 不换的话 Chrome 会静默绑到 [::1],
- * 客户端连 127.0.0.1 永远超时。cfgPath 给了就把新端口回写配置(下次直接对)。
+ * 客户端连 127.0.0.1 永远超时。只定端口不写配置(配置由调用方在真起来之后写)。
  */
-async function pickPort(want: number, cfgPath?: string, cfg?: BrowserConfig): Promise<number> {
+async function pickPort(want: number): Promise<number> {
   if (await portFree(want)) { setPort(want); return want; }
   const port = await findFreePort(want + 1);
   setPort(port);
-  if (cfgPath && cfg) writeConfigAtomic(cfgPath, { ...cfg, port });
-  console.error(`⚠ 端口 ${want} 被其它进程占用(且不是可用的 CDP 端点),改用 ${port}${cfgPath && cfg ? `,已更新 ${cfgPath}` : ''}`);
+  console.error(`⚠ 端口 ${want} 被其它进程占用(且不是可用的 CDP 端点),改用 ${port}`);
   return port;
+}
+
+/**
+ * 拉起并等就绪;端口没就绪就换个空闲口再试一次,成功返回实际端口,失败返回 null。
+ * 为什么要重试:portFree 是"能不能 bind"的探测,posix 上准;win 上若占用方用了 SO_REUSEADDR,
+ * 我们可能 bind 得上却仍与其撞口(浏览器起不来)。重试一次把这种漏检也兜住,不留平台差异。
+ */
+async function launchReady(exe: string, args: string[], port: number, userData: string): Promise<number | null> {
+  for (const p of [port, null]) {
+    let target: number;
+    if (p === null) {
+      try { target = await findFreePort(port + 1); } catch { return null; }
+      console.error(`⚠ 端口 ${port} 上浏览器没能就绪,改用 ${target} 重试`);
+    } else target = p;
+    setPort(target);
+    try { launch(exe, args, target, userData); await waitReady(); return target; }
+    catch { killLast(); }
+  }
+  return null;
 }
 
 /** 冷启动:有配置则用(坏则抛,不兜底);无配置则 bootstrap 发现并写配置。 */
@@ -108,15 +126,17 @@ async function coldStart(): Promise<{ kind: BrowserKind; exe: string; userData: 
     if (!cfg) throw new Error(`浏览器启动配置损坏,不做兜底,请编辑 ${p}`);
     if (!existsSync(cfg.exe)) throw new Error(`browser.json 的 exe 不存在: ${cfg.exe}\n请编辑 ${p}`);
     mkdirSync(cfg.userData, { recursive: true });
-    const port = await pickPort(cfg.port, p, cfg);
-    launch(cfg.exe, cfg.args, port, cfg.userData);
-    await waitReady();
+    const want = await pickPort(cfg.port);
+    const port = await launchReady(cfg.exe, cfg.args, want, cfg.userData);
+    if (port == null) throw new Error(`浏览器启动超时(${cfg.exe} 在端口 ${want} 未就绪)。请检查 ${p} 的 exe/args/port`);
+    // 端口漂了(被占/没就绪换口)就回写配置,下次直接对
+    if (port !== cfg.port) { writeConfigAtomic(p, { ...cfg, port }); console.error(`已把端口 ${port} 写回 ${p}`); }
     maybeSpawnDaemon();
     return { kind: cfg.kind, exe: cfg.exe, userData: cfg.userData, port };
   }
 
   // 缺失 → bootstrap:逐个候选尝试,首个能拉起者写配置(userData 用默认值,port 取首个空闲)
-  const port = await pickPort(DEFAULT_PORT);
+  const want = await pickPort(DEFAULT_PORT);
   const userData = DEFAULT_USER_DATA();
   mkdirSync(userData, { recursive: true });
   const tried: string[] = [];
@@ -125,15 +145,15 @@ async function coldStart(): Promise<{ kind: BrowserKind; exe: string; userData: 
     if (!exe) continue;
     tried.push(exe);
     const args = defaultArgs();
-    try { launch(exe, args, port, userData); await waitReady(); }
-    catch { killLast(); continue; }
+    const port = await launchReady(exe, args, want, userData);
+    if (port == null) continue;
     writeConfigAtomic(p, { exe, kind: c.kind, args, port, userData });
     maybeSpawnDaemon();
     return { kind: c.kind, exe, userData, port };
   }
   // 区分两种失败:一个候选都不存在 vs 存在但都没在端口上就绪(后者给出试过谁,别让人以为没装浏览器)
   throw new Error(tried.length
-    ? `找到浏览器但都没能在端口 ${port} 就绪(试过: ${tried.join(', ')})。可手动创建 ${p} 指定 exe/args/port`
+    ? `找到浏览器但都没能在端口 ${want} 就绪(试过: ${tried.join(', ')})。可手动创建 ${p} 指定 exe/args/port`
     : `未找到可用浏览器。可手动创建 ${p} 指定 exe/args`);
 }
 
