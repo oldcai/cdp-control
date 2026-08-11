@@ -8,18 +8,41 @@
 import { createServer, connect, isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
 
-/**
- * host:port 能否绑定(能绑=空闲)。**只有 `EADDRINUSE` 才算被占**:绑不上的其它原因
- * (地址不属于本机 EADDRNOTAVAIL、低端口 EACCES 等)说明"我们判断不了",这时不该谎称被占
- * 而去换端口——换了照样起不来,还把真因藏了。
- */
-export function portFree(port: number, host = '127.0.0.1'): Promise<boolean> {
+/** 绑定探测:绑上了返回 `'free'`,否则返回错误码(`EADDRINUSE`/`EACCES`/`EADDRNOTAVAIL`/…)。 */
+export function probeBind(port: number, host = '127.0.0.1'): Promise<string> {
   return new Promise(resolve => {
     const srv = createServer();
-    srv.once('error', (e: NodeJS.ErrnoException) => resolve(e?.code !== 'EADDRINUSE'));
-    srv.once('listening', () => srv.close(() => resolve(true)));
+    srv.once('error', (e: NodeJS.ErrnoException) => resolve(e?.code || 'UNKNOWN'));
+    srv.once('listening', () => srv.close(() => resolve('free')));
     srv.listen({ port, host, exclusive: true });
   });
+}
+
+/**
+ * "这个端口上**有没有别人**"(宽松语义,回答 ensureBrowser 的"配置端口是不是被占了")。
+ * **只有 `EADDRINUSE` 才算被占**:绑不上的其它原因(地址不属于本机 EADDRNOTAVAIL、低端口 EACCES 等)
+ * 说明"我们判断不了",这时不该谎称被占而去换端口——换了照样起不来,还把真因藏了。
+ * **别拿它挑新端口**:"不是被占"不等于"我们能绑"(见 `bindable`/`findFreePort`)。
+ */
+export async function portFree(port: number, host = '127.0.0.1'): Promise<boolean> {
+  return (await probeBind(port, host)) !== 'EADDRINUSE';
+}
+
+/**
+ * "这个端口**我们确实能绑**"(严格语义,挑启动端口用)。宽松的 `portFree` 会把 `EACCES`
+ * (win 的 excluded port range、无权限的低端口)当"空闲",于是 `findFreePort` 选中一个谁都绑不上的
+ * 端口、浏览器等到超时,还可能在同一受限区间里再选一次。故挑端口必须要求**真的绑上**。
+ * 例外只有一个:回环地址上"整个地址族没开"(关了 IPv6 的机器探 `::1`)—— 那地址压根不是端点,
+ * 跳过它,否则 `CDP_HOST=localhost` 在这类机器上会挑不出任何端口(与 `addrUnusable` 同一判定)。
+ */
+async function bindable(port: number, addrs: string[]): Promise<{ ok: true } | { ok: false; code: string }> {
+  for (const a of addrs) {
+    const r = await probeBind(port, a);
+    if (r === 'free') continue;
+    if (r !== 'EADDRINUSE' && addrUnusable(a, r)) continue;
+    return { ok: false, code: r };
+  }
+  return { ok: true };
 }
 
 /**
@@ -99,11 +122,23 @@ function connectProbe(port: number, host: string, timeoutMs: number): Promise<bo
   });
 }
 
-/** 从 start 起找第一个对 host 空闲的端口(含 start);span 内全被占则抛清晰错。host 只解析一次。 */
+/**
+ * 从 start 起找第一个**我们确实能绑**的端口(含 start);span 内一个都挑不出则抛清晰错。
+ * host 只解析一次(不然扫 50 个端口打 50 次 DNS)。错误信息区分"被别人占满"与"绑不上"
+ * (EACCES/受限区间/地址不属于本机),后者换端口也没用,得让用户看见真因。
+ */
 export async function findFreePort(start: number, span = 50, host = '127.0.0.1'): Promise<number> {
   const addrs = await resolveHostAddrs(host);
-  for (let p = start; p < start + span; p++) if (await allFree(p, addrs)) return p;
-  throw new Error(`端口 ${start}-${start + span - 1} 全被占用,无法启动浏览器`);
+  let blocked = '';
+  for (let p = start; p < start + span; p++) {
+    const r = await bindable(p, addrs);
+    if (r.ok) return p;
+    if (r.code !== 'EADDRINUSE') blocked = r.code;
+  }
+  const range = `端口 ${start}-${start + span - 1}`;
+  throw new Error(blocked
+    ? `${range} 都无法绑定(host=${host},最后一个原因 ${blocked}),无法启动浏览器`
+    : `${range} 全被占用,无法启动浏览器`);
 }
 
 /** host → 数值地址集合。零依赖、不做 DNS,只归一化最常见的 `localhost`(它同时是两个回环地址)。 */

@@ -132,7 +132,9 @@ async function launchReady(exe: string, args: string[], port: number, userData: 
   for (const p of [port, null]) {
     let target: number;
     if (p === null) {
-      try { target = await findFreePort(port + 1, 50, HOST); } catch { return null; }
+      // 挑不出可绑端口(EACCES/受限区间/地址不属于本机、或真被占满)是**硬失败**,换个候选浏览器也没用:
+      // 让 findFreePort 的真因抛出去,别被"启动超时 + 单例"的兜底提示盖掉。
+      target = await findFreePort(port + 1, 50, HOST);
       console.error(`⚠ 端口 ${port} 上浏览器没能就绪,改用 ${target} 重试`);
     } else target = p;
     setPort(target);

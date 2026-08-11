@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:net';
-import { portFree, portFreeOn, findFreePort, endpointAlive, resolveHostAddrs, addrUnusable, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
+import { portFree, portFreeOn, findFreePort, probeBind, endpointAlive, resolveHostAddrs, addrUnusable, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
 
 /** 假 dns.lookup:让单测能构造任意地址集合,不打真 DNS。 */
 const fakeLookup = (...addrs: string[]) =>
@@ -76,6 +76,25 @@ test('portFreeOn: localhost 要两个回环都空;只占 [::1] 时 IPv4 探测�
 test('portFree: 只有 EADDRINUSE 算被占,绑不上的其它原因不算(否则会白换端口)', async () => {
   // 203.0.113.1 是 TEST-NET-3,不属于本机 → EADDRNOTAVAIL,不该被当成"端口被占"
   assert.equal(await portFree(19600, '203.0.113.1'), true);
+});
+
+test('probeBind: 绑上回 free,被占回 EADDRINUSE,地址不属于本机回错误码', async () => {
+  const port = await findFreePort(19950);
+  assert.equal(await probeBind(port), 'free');
+  const srv = await listen(port);
+  assert.equal(await probeBind(port), 'EADDRINUSE');
+  await close(srv);
+  assert.notEqual(await probeBind(19951, '203.0.113.1'), 'free');   // EADDRNOTAVAIL 之类
+});
+
+test('findFreePort: 挑端口要求"真能绑",绑不上的端口不许选(EACCES/地址不可用换口也没用)', async () => {
+  // 地址不属于本机:宽松的 portFree 会说"空闲",严格的挑端口必须拒绝,并在错误里点明真因
+  await assert.rejects(() => findFreePort(19960, 3, '203.0.113.1'), /无法绑定.*host=203\.0\.113\.1/);
+  assert.equal(await portFree(19960, '203.0.113.1'), true);          // 宽松语义保持不变(不谎称被占)
+  // 低端口 EACCES(root 下能绑,跳过)
+  if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+    await assert.rejects(() => findFreePort(1, 2), /无法绑定.*EACCES/);
+  }
 });
 
 test('endpointAlive: 有人监听 true,明确拒绝 false,判断不了 null(connect 探测,与 bind 语义分开)', async () => {
