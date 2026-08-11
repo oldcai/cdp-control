@@ -4,7 +4,7 @@
  */
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { BrowserKind } from './browser-discover';
+import type { BrowserKind } from './browser-discover.ts';
 
 export interface BrowserConfig {
   exe: string; kind: BrowserKind; args: string[]; port: number; userData: string;
