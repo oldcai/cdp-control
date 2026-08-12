@@ -14,6 +14,7 @@ export const DEFAULT_NODE_LAYERS = Object.freeze([
     files: [
       'src/transport.ts',
       'src/browser-port.ts',
+      'src/process-identity.ts',
       'src/monitor-endpoint.ts',
       'src/monitor-process.ts',
       'src/monitor-startup.ts',

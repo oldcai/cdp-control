@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { getJson, setEndpointHost, setPort, HOST, PORT, sleep } from './transport';
 import { maybeSpawnDaemon } from './monitor';
 import { cdpNoAutostart } from './paths.ts';
+import { processBirthIdentity } from './process-identity.ts';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
 import {
   browserConfigPath,
@@ -365,6 +366,7 @@ async function fixedPortDependencies(assertAuthority?: AuthorityGuard): Promise<
     busyGraceProbe: async () => probeReadySoonForHosts(resolvedHosts, 3000),
     portState: port => portStateForHosts(port, resolvedHosts),
     listenerPids: port => listenerPidsForHosts(port, resolvedHosts),
+    processIdentity: processBirthIdentity,
     assertAddressSet: async () => {
       let currentHosts: string[];
       try {
@@ -670,7 +672,7 @@ export async function killBrowser(): Promise<KillResult> {
   const plan = await planListenerCleanup(port, dependencies);
   if (plan.action === 'noProcess') return { ok: true, port, reason: 'noProcess' };
   if (plan.action === 'stillUp') return { ok: false, port, reason: 'stillUp' };
-  const release = await reclaimFixedPortListeners(port, plan.pids, dependencies);
+  const release = await reclaimFixedPortListeners(port, plan.listeners, dependencies);
   if (release.state !== 'free') return { ok: false, port, reason: 'stillUp' };
   return release.killFailures.length ? { ok: false, port, reason: 'killFailed' } : { ok: true, port, reason: 'killed' };
 }

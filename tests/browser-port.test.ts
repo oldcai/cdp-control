@@ -18,6 +18,7 @@ import {
   resolveSocketHosts,
   socketHost,
   type FixedPortDependencies,
+  type ListenerProcess,
   type ProbeResult,
   type PortState,
   FixedPortLaunchAttempt,
@@ -28,6 +29,14 @@ import {
   planListenerCleanup,
   waitForCdpReady,
 } from '../src/browser-port.ts';
+
+function listenerProcess(pid: number, identity = `pid-${pid}:birth`): ListenerProcess {
+  return { pid, identity };
+}
+
+function stableProcessIdentity(pid: number): string {
+  return listenerProcess(pid).identity;
+}
 
 test('hasCdpWebSocket: 只接受非空 ws/wss URL，普通 truthy 值不算健康 CDP', () => {
   assert.equal(hasCdpWebSocket({ webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/x' }), true);
@@ -368,6 +377,7 @@ test('settleFixedPortLaunch: waitReady 成功后地址身份变化必须 fail cl
         probe: async () => ({ ready: false }),
         portState: async () => ({ state: 'free' }),
         listenerPids: async () => [],
+        processIdentity: stableProcessIdentity,
         killPid: () => undefined,
         sleep: async () => undefined,
       }),
@@ -392,6 +402,7 @@ test('settleFixedPortLaunch: async 地址复核期间配置改口时不得返回
         probe: async () => ({ ready: false }),
         portState: async () => ({ state: 'free' }),
         listenerPids: async () => [],
+        processIdentity: stableProcessIdentity,
         killPid: () => undefined,
         sleep: async () => undefined,
       }),
@@ -424,15 +435,34 @@ test('waitForCdpReady: 早退宽限结束仍无健康 CDP 时保留真实退出�
 test('killListenerPids: 单个 listener 结束失败仍尝试其余 PID，并聚合真因', async () => {
   const attempted: number[] = [];
   const failures = await killListenerPids(
-    [711, 712],
+    [listenerProcess(711), listenerProcess(712)],
     pid => {
       attempted.push(pid);
       if (pid === 711) throw new Error('EPERM fixture');
     },
     () => undefined,
+    stableProcessIdentity,
   );
   assert.deepEqual(attempted, [711, 712]);
   assert.deepEqual(failures, ['711: EPERM fixture']);
+});
+
+test('killListenerPids: 最终 await 后 birth identity 变化则同步拦截，不 signal 同 PID 替代者', async () => {
+  const killed: number[] = [];
+  let identity = 'pid-713:birth-1';
+  await assert.rejects(
+    () =>
+      killListenerPids(
+        [listenerProcess(713, identity)],
+        pid => killed.push(pid),
+        async () => {
+          identity = 'pid-713:birth-2';
+        },
+        () => identity,
+      ),
+    error => error instanceof FixedPortError && /进程实例已变化/.test(error.message),
+  );
+  assert.deepEqual(killed, []);
 });
 
 test('planListenerCleanup: 异步地址复核后权威改口则不得返回 noProcess', async () => {
@@ -451,6 +481,7 @@ test('planListenerCleanup: 异步地址复核后权威改口则不得返回 noPr
         },
         portState: async () => ({ state: 'free' }),
         listenerPids: async () => [888],
+        processIdentity: stableProcessIdentity,
       }),
     error => error === authorityChanged,
   );
@@ -467,6 +498,7 @@ test('planListenerCleanup: 端点空闲时不枚举、更不误杀另一地址�
       calls.push('listeners');
       return [888];
     },
+    processIdentity: stableProcessIdentity,
   });
   assert.deepEqual(plan, { action: 'noProcess' });
   assert.deepEqual(calls, ['state']);
@@ -482,8 +514,9 @@ test('planListenerCleanup: 只有端点持续 busy 且 PID 快照稳定才允许
     await planListenerCleanup(9222, {
       portState: async () => states.shift() ?? { state: 'busy' },
       listenerPids: async () => listeners.shift() ?? [],
+      processIdentity: stableProcessIdentity,
     }),
-    { action: 'kill', pids: [902, 901] },
+    { action: 'kill', listeners: [listenerProcess(902), listenerProcess(901)] },
   );
 });
 
@@ -493,6 +526,7 @@ test('planListenerCleanup: 端点 busy 但 PID 快照换代时 fail closed', asy
     await planListenerCleanup(9222, {
       portState: async () => ({ state: 'busy' }),
       listenerPids: async () => listeners.shift() ?? [],
+      processIdentity: stableProcessIdentity,
     }),
     { action: 'stillUp' },
   );
@@ -519,6 +553,7 @@ test('planListenerCleanup: 异步枚举期间权威配置变化时立即中止',
           authoritative = false;
           return [921];
         },
+        processIdentity: stableProcessIdentity,
       }),
     error => error === authorityChanged,
   );
@@ -538,11 +573,12 @@ test('reclaimFixedPortListeners: 权威配置已变化时在首个 kill 前 fail
   const killed: number[] = [];
   await assert.rejects(
     () =>
-      reclaimFixedPortListeners(9222, [931, 932], {
+      reclaimFixedPortListeners(9222, [listenerProcess(931), listenerProcess(932)], {
         assertAuthority: () => {
           throw authorityChanged;
         },
         listenerPids: async () => [931, 932],
+        processIdentity: stableProcessIdentity,
         killPid: pid => killed.push(pid),
         portState: async () => ({ state: 'free' }),
         sleep: async () => {},
@@ -570,6 +606,7 @@ test('prepareFixedPort: 破坏性门禁的 DNS 地址集合变化时 fail closed
           return [941];
         },
         assertAddressSet,
+        processIdentity: stableProcessIdentity,
         killPid: pid => killed.push(pid),
         sleep: async () => undefined,
       }),
@@ -582,15 +619,16 @@ test('reclaimFixedPortListeners: 杀前复确认 PID 仍是当前 listener，已
   const killed: number[] = [];
   await assert.rejects(
     () =>
-      reclaimFixedPortListeners(9222, [961, 962], {
+      reclaimFixedPortListeners(9222, [listenerProcess(961), listenerProcess(962)], {
         listenerPids: async () => [961],
+        processIdentity: stableProcessIdentity,
         killPid: pid => {
           killed.push(pid);
         },
         portState: async () => ({ state: 'busy' }),
         sleep: async () => undefined,
       }),
-    error => error instanceof FixedPortError && /监听进程身份已变化.*PID 962/.test(error.message),
+    error => error instanceof FixedPortError && /监听进程实例已变化.*PID 962/.test(error.message),
   );
   assert.deepEqual(killed, [961]);
 });
@@ -602,11 +640,12 @@ test('reclaimFixedPortListeners: 每个 PID 前复核 DNS 地址集合，变化�
 
   await assert.rejects(
     () =>
-      reclaimFixedPortListeners(24131, [951, 952], {
+      reclaimFixedPortListeners(24131, [listenerProcess(951), listenerProcess(952)], {
         assertAddressSet: () => {
           if (addressSetChanged) throw dnsChanged;
         },
         listenerPids: async () => [951, 952],
+        processIdentity: stableProcessIdentity,
         killPid: pid => {
           killed.push(pid);
           addressSetChanged = true;
@@ -627,14 +666,36 @@ test('reclaimFixedPortListeners: 异步 guard 期间 listener PID 被替换时 f
       currentListeners = [1961];
     },
     listenerPids: async () => currentListeners,
+    processIdentity: stableProcessIdentity,
     killPid: (pid: number) => killed.push(pid),
     portState: async () => ({ state: 'free' }) satisfies PortState,
     sleep: async () => undefined,
   };
 
   await assert.rejects(
-    () => reclaimFixedPortListeners(24133, [961], deps),
-    error => error instanceof FixedPortError && /监听进程身份已变化/.test(error.message),
+    () => reclaimFixedPortListeners(24133, [listenerProcess(961)], deps),
+    error => error instanceof FixedPortError && /监听进程实例已变化/.test(error.message),
+  );
+  assert.deepEqual(killed, []);
+});
+
+test('reclaimFixedPortListeners: 异步 guard 期间 PID 被复用为新进程时 fail closed，不 kill 替代者', async () => {
+  const killed: number[] = [];
+  let processIdentity = 'pid-1971:birth-1';
+  const deps = {
+    assertAddressSet: async () => {
+      processIdentity = 'pid-1971:birth-2';
+    },
+    listenerPids: async () => [1971],
+    processIdentity: () => processIdentity,
+    killPid: (pid: number) => killed.push(pid),
+    portState: async () => ({ state: 'free' }) satisfies PortState,
+    sleep: async () => undefined,
+  };
+
+  await assert.rejects(
+    () => reclaimFixedPortListeners(24138, [listenerProcess(1971, 'pid-1971:birth-1')], deps),
+    error => error instanceof FixedPortError && /进程实例已变化/.test(error.message),
   );
   assert.deepEqual(killed, []);
 });
@@ -646,12 +707,13 @@ test('reclaimFixedPortListeners: listener 快照期间 DNS 集合变化时在 ki
 
   await assert.rejects(
     () =>
-      reclaimFixedPortListeners(24134, [971], {
+      reclaimFixedPortListeners(24134, [listenerProcess(971)], {
         assertAddressSet: async () => {
           addressChecks += 1;
           if (addressChecks === 2) throw dnsChanged;
         },
         listenerPids: async () => [971],
+        processIdentity: stableProcessIdentity,
         killPid: pid => killed.push(pid),
         portState: async () => ({ state: 'free' }),
         sleep: async () => undefined,
@@ -699,6 +761,7 @@ function dependencies(
       if (listeners.length > 1) return listeners.shift()!;
       return listeners[0] ?? [];
     },
+    processIdentity: stableProcessIdentity,
     killPid: pid => {
       calls.push(`kill:${pid}`);
       if (options.killError) throw options.killError;
@@ -728,6 +791,7 @@ test('prepareFixedPort: 探活后异步地址复核期间权威配置变化则�
         probe: async () => ({ ready: true, browser: 'Chrome/stale-port' }),
         portState: async () => ({ state: 'busy' }),
         listenerPids: async () => [981],
+        processIdentity: stableProcessIdentity,
         killPid: () => {
           throw new Error('should not kill');
         },
@@ -761,6 +825,7 @@ test('prepareFixedPort: async 地址复核期间配置改口时不得消费旧 p
         probe: async () => ({ ready: true, browser: 'Chrome/stale-authority' }),
         portState: async () => ({ state: 'free' }),
         listenerPids: async () => [],
+        processIdentity: stableProcessIdentity,
         killPid: () => undefined,
         sleep: async () => undefined,
       }),
@@ -886,6 +951,7 @@ test('prepareFixedPort: async launch 期间配置改口时不得返回 launch su
         probe: async () => ({ ready: false }),
         portState: async () => ({ state: 'free' }),
         listenerPids: async () => [],
+        processIdentity: stableProcessIdentity,
         killPid: () => undefined,
         launch: async () => {
           authoritative = false;
@@ -913,6 +979,7 @@ test('prepareFixedPort: 最终空闲检查期间权威端口改变时在 spawn �
       return { state: 'free' };
     },
     listenerPids: async () => [],
+    processIdentity: stableProcessIdentity,
     killPid: () => undefined,
     launch: async port => {
       calls.push(`launch:${port}`);
@@ -1009,6 +1076,7 @@ test('prepareFixedPort: 最终健康探测期间 listener 换代则重新判断�
       calls.push(`listeners:${listenerPid}`);
       return [listenerPid];
     },
+    processIdentity: stableProcessIdentity,
     killPid: pid => {
       calls.push(`kill:${pid}`);
     },
@@ -1038,6 +1106,7 @@ test('prepareFixedPort: listener 枚举失败属于端口门禁硬失败，不�
     listenerPids: async () => {
       throw new Error('lsof ENOENT fixture');
     },
+    processIdentity: stableProcessIdentity,
     killPid: () => undefined,
     launch: async port => {
       calls.push(`launch:${port}`);
@@ -1140,6 +1209,7 @@ test('prepareFixedPort: 某个 kill 失败仍尝试其余 listener，并复查�
     probe: async () => ({ ready: false }),
     portState: async () => ({ state: 'busy' }),
     listenerPids: async () => [711, 712],
+    processIdentity: stableProcessIdentity,
     killPid: pid => {
       calls.push(`kill:${pid}`);
       if (pid === 711) throw new Error('EPERM 711');
@@ -1154,8 +1224,9 @@ test('prepareFixedPort: 某个 kill 失败仍尝试其余 listener，并复查�
 
 test('reclaimFixedPortListeners: 早期 kill 失败仍尝试全部 PID，并同时报告最终端口状态和失败', async () => {
   const calls: string[] = [];
-  const result = await reclaimFixedPortListeners(24122, [721, 722], {
+  const result = await reclaimFixedPortListeners(24122, [listenerProcess(721), listenerProcess(722)], {
     listenerPids: async () => [721, 722],
+    processIdentity: stableProcessIdentity,
     killPid: pid => {
       calls.push(`kill:${pid}`);
       if (pid === 721) throw new Error('EPERM 721');
