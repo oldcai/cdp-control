@@ -322,10 +322,12 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
     let childParent: number | null = parentRef;
     if (n.wantRef && n.el) {
       n.ref = (globalThis as any).__cdpRefs.length;
+      n.budgetRef = n.ref;
       // 登记表存 {el, parentRef}:parentRef = 最近的已登记祖先 ref 号(跳表),供 ref 失效自愈向上找存活容器。
       (globalThis as any).__cdpRefs.push({ el: n.el, parentRef });
       if (n.ref != null) childParent = n.ref;
     } else if (n.wantHidden && n.el) {
+      n.budgetRef = (globalThis as any).__cdpRefs.length;
       (globalThis as any).__cdpRefs.push({ el: n.el, parentRef });
     }
     for (const k of n.kids) assign(k, childParent);

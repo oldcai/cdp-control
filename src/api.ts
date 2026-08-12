@@ -103,6 +103,8 @@ export interface ViewOpts {
   selector?: string; visibleOnly?: boolean; ref?: number; ancestor?: number;
   scrollToLoad?: boolean; scrollPages?: number; scrollTo?: string; scrollWait?: number;
   maxLen?: number; // 文本截断阈值;缺省不截断
+  budget?: number; // 总渲染字符预算;缺省不开启
+  focus?: number; // 整页骨架中只展开该既有 ref 的子树;须与 budget 同用
 }
 
 /** 结构视图:把 target 页面建为紧凑简化 HTML 树(文本 + 结构)。锚点互斥:ref 优先,其次 selector,缺省 body;
@@ -111,9 +113,19 @@ export interface ViewOpts {
  * 折叠:Node 侧按 target 页 hostname+pathname 读 fold-selectors.csv 命中规则(path glob 限定同域名下页面路径),
  * 传入注入侧 buildView 折叠成一行(跨会话持久)。 */
 export async function view(target: Target, opts: ViewOpts = {}): Promise<any> {
+  if (opts.budget != null && (!Number.isSafeInteger(opts.budget) || opts.budget <= 0)) {
+    throw new Error('--budget 必须是正整数');
+  }
+  if (opts.focus != null && (!Number.isSafeInteger(opts.focus) || opts.focus < 0)) {
+    throw new Error('--focus 必须是非负整数 ref');
+  }
+  if (opts.focus != null && opts.budget == null) throw new Error('--focus 必须与 --budget 配合使用');
+  if (opts.focus != null && (opts.ref != null || opts.selector != null)) {
+    throw new Error('--focus 与位置 ref / selector 不能同时使用');
+  }
   const folds = matchFolds(hostOf(target.url), pathOf(target.url)).map(r => ({ selector: r.selector, note: r.note }));
   const ignore = loadLinkRules().map(r => r.pattern);
-  return invoke(target, viewExpr(opts.selector, opts.visibleOnly, opts.ref, opts.ancestor, opts.scrollToLoad, folds, opts.scrollPages, opts.scrollTo, opts.scrollWait, ignore.length ? ignore : undefined, opts.maxLen), 30000);
+  return invoke(target, viewExpr(opts.selector, opts.visibleOnly, opts.ref, opts.ancestor, opts.scrollToLoad, folds, opts.scrollPages, opts.scrollTo, opts.scrollWait, ignore.length ? ignore : undefined, opts.maxLen, opts.budget, opts.focus), 30000);
 }
 
 /** 一次性抓取页面:临时 open 新 tab 打开 url → 等页面加载(至少 interactive)→ view 建树 → 关闭 tab,
