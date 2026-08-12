@@ -91,8 +91,15 @@ function packMetadata(stdout) {
   const parsed = parseNpmJsonArray(stdout);
   if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error('npm pack 必须恰好返回一个包');
   const metadata = parsed[0];
-  if (!metadata || typeof metadata.filename !== 'string' || !Array.isArray(metadata.files)) {
-    throw new Error('npm pack 元数据缺少 filename/files');
+  // version 与 filename/files 同为承载断言的字段:下游拿它断言安装后 `--version` 的输出,
+  // 缺了会退化成 stdout.includes(undefined) → 报"CLI 没输出 undefined",把锅甩给 CLI。
+  if (
+    !metadata ||
+    typeof metadata.filename !== 'string' ||
+    typeof metadata.version !== 'string' ||
+    !Array.isArray(metadata.files)
+  ) {
+    throw new Error('npm pack 元数据缺少 filename/version/files');
   }
   return metadata;
 }
