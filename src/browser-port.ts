@@ -17,6 +17,12 @@ export type AddressPortState =
   | { address: string; state: 'unknown'; code: string; reason: string };
 export type FixedPortAction = { action: 'reuse'; browser?: string } | { action: 'launch'; port: number };
 
+/** PID 数字会被 OS 复用；破坏性流程必须同时绑定该进程实例的稳定 birth identity。 */
+export interface ListenerProcess {
+  pid: number;
+  identity: string;
+}
+
 /** 端口门禁失败；调用方据此区分“不得继续”的安全错误与某个浏览器候选自身启动失败。 */
 export class FixedPortError extends Error {}
 
@@ -250,6 +256,8 @@ export interface FixedPortDependencies {
   busyGraceProbe?(port: number): Promise<ProbeResult>;
   portState(port: number): Promise<PortState>;
   listenerPids(port: number): Promise<number[]>;
+  /** 同步读取进程 birth identity，确保最终复核与 signal 之间没有 await。 */
+  processIdentity(pid: number): string;
   killPid(pid: number): void;
   launch?(port: number): Promise<void>;
   sleep(ms: number): Promise<void>;
@@ -262,13 +270,17 @@ export type ListenerReclaimResult =
   | { state: 'busy'; killFailures: string[] }
   | { state: 'unknown'; reason: string; killFailures: string[] };
 
-export type ListenerCleanupPlan = { action: 'kill'; pids: number[] } | { action: 'noProcess' } | { action: 'stillUp' };
+export type ListenerCleanupPlan =
+  | { action: 'kill'; listeners: ListenerProcess[] }
+  | { action: 'noProcess' }
+  | { action: 'stillUp' };
 
 type ListenerReclaimDependencies = Pick<
   FixedPortDependencies,
   | 'assertAuthority'
   | 'assertAddressSet'
   | 'listenerPids'
+  | 'processIdentity'
   | 'killPid'
   | 'portState'
   | 'sleep'
@@ -278,19 +290,27 @@ type ListenerReclaimDependencies = Pick<
 
 /** 对全部 listener 做 best-effort 回收；单个失败不阻断其余 PID，并保留每个真因。 */
 export async function killListenerPids(
-  pids: number[],
+  listeners: ListenerProcess[],
   killPid: (pid: number) => void,
-  beforeKill: (pid: number) => void | Promise<void>,
+  beforeKill: (listener: ListenerProcess) => void | Promise<void>,
+  processIdentity: (pid: number) => string,
 ): Promise<string[]> {
   const failures: string[] = [];
-  for (const pid of pids) {
+  for (const listener of listeners) {
     // 权威变化不是某个 PID 的 best-effort 失败；必须在破坏性操作外层立即抛出。
-    await beforeKill(pid);
+    await beforeKill(listener);
+    // 这是 signal 前最后一个同步检查；其后不得再 await，避免同 PID 的替代进程被误杀。
+    const currentIdentity = captureProcessIdentity(listener.pid, { processIdentity });
+    if (currentIdentity !== listener.identity) {
+      throw new FixedPortError(
+        `PID ${listener.pid} 的进程实例已变化(${listener.identity} -> ${currentIdentity})，拒绝结束替代进程`,
+      );
+    }
     try {
-      killPid(pid);
+      killPid(listener.pid);
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
-      failures.push(`${pid}: ${detail}`);
+      failures.push(`${listener.pid}: ${detail}`);
     }
   }
   return failures;
@@ -302,7 +322,10 @@ export async function killListenerPids(
  */
 export async function planListenerCleanup(
   port: number,
-  deps: Pick<FixedPortDependencies, 'assertAuthority' | 'assertAddressSet' | 'portState' | 'listenerPids'>,
+  deps: Pick<
+    FixedPortDependencies,
+    'assertAuthority' | 'assertAddressSet' | 'portState' | 'listenerPids' | 'processIdentity'
+  >,
 ): Promise<ListenerCleanupPlan> {
   await assertFixedPortGuards(port, deps);
   const initialState = await deps.portState(port);
@@ -310,16 +333,16 @@ export async function planListenerCleanup(
   if (initialState.state === 'free') return { action: 'noProcess' };
   if (initialState.state === 'unknown') return { action: 'stillUp' };
 
-  const firstPids = normalizePids(await deps.listenerPids(port));
+  const firstListeners = await listenerSnapshot(port, deps);
   await assertFixedPortGuards(port, deps);
   const finalState = await deps.portState(port);
   await assertFixedPortGuards(port, deps);
   if (finalState.state === 'free') return { action: 'noProcess' };
   if (finalState.state === 'unknown') return { action: 'stillUp' };
-  const finalPids = normalizePids(await deps.listenerPids(port));
+  const finalListeners = await listenerSnapshot(port, deps);
   await assertFixedPortGuards(port, deps);
-  if (!firstPids.length || !samePids(firstPids, finalPids)) return { action: 'stillUp' };
-  return { action: 'kill', pids: finalPids };
+  if (!firstListeners.length || !sameListenerProcesses(firstListeners, finalListeners)) return { action: 'stillUp' };
+  return { action: 'kill', listeners: finalListeners };
 }
 
 /**
@@ -345,30 +368,30 @@ export async function settleFixedPortLaunch(
 /** 尝试整组 listener 后轮询端口；调用方同时拿到最终状态与全部 kill 失败。 */
 export async function reclaimFixedPortListeners(
   port: number,
-  pids: number[],
+  listeners: ListenerProcess[],
   deps: ListenerReclaimDependencies,
 ): Promise<ListenerReclaimResult> {
-  const expectedPids = normalizePids(pids);
-  const expectedPidSet = new Set(expectedPids);
-  const guard = async (pid: number): Promise<void> => {
+  const expectedListeners = normalizeListenerProcesses(listeners);
+  const expectedByPid = new Map(expectedListeners.map(listener => [listener.pid, listener.identity]));
+  const guard = async (listener: ListenerProcess): Promise<void> => {
     await assertFixedPortGuards(port, deps);
     const beforeAddressValidation = await listenerSnapshot(port, deps);
     // 首次快照后再复核 DNS 集合，并以第二次 listener 枚举作为 kill 前最后一个 awaited 步骤。
     // 这样既不会消费陈旧地址授权，也避免 async guard 后旧 PID 被无关进程复用。
     await assertFixedPortGuards(port, deps);
-    const currentPids = await listenerSnapshot(port, deps);
+    const currentListeners = await listenerSnapshot(port, deps);
     assertAuthority(port, deps);
     if (
-      !samePids(beforeAddressValidation, currentPids) ||
-      !currentPids.includes(pid) ||
-      currentPids.some(currentPid => !expectedPidSet.has(currentPid))
+      !sameListenerProcesses(beforeAddressValidation, currentListeners) ||
+      !currentListeners.some(current => current.pid === listener.pid && current.identity === listener.identity) ||
+      currentListeners.some(current => expectedByPid.get(current.pid) !== current.identity)
     ) {
       throw new FixedPortError(
-        `配置端口 ${port} 的监听进程身份已变化(${expectedPids.join(', ')} -> ${currentPids.join(', ')})，拒绝结束 PID ${pid}`,
+        `配置端口 ${port} 的监听进程实例已变化(${formatListenerProcesses(expectedListeners)} -> ${formatListenerProcesses(currentListeners)})，拒绝结束 PID ${listener.pid}`,
       );
     }
   };
-  const killFailures = await killListenerPids(expectedPids, deps.killPid, guard);
+  const killFailures = await killListenerPids(expectedListeners, deps.killPid, guard, deps.processIdentity);
   await assertFixedPortGuards(port, deps);
 
   const timeoutMs = deps.releaseTimeoutMs ?? 3000;
@@ -428,7 +451,7 @@ async function prepareFixedPortAttempt(
     if (graceProbe.ready) return { action: 'reuse', browser: graceProbe.browser };
   }
 
-  const observedPids = await listenerSnapshot(port, deps);
+  const observedListeners = await listenerSnapshot(port, deps);
   await assertFixedPortGuards(port, deps);
 
   // 枚举 listener 后、破坏性操作前最后再确认一次，避免误杀并发期间刚就绪的健康 CDP。
@@ -442,13 +465,13 @@ async function prepareFixedPortAttempt(
   }
   if (finalState.state === 'unknown')
     throw new FixedPortError(`无法确认配置端口 ${port} 的状态: ${finalState.reason}，拒绝启动浏览器`);
-  if (!observedPids.length)
+  if (!observedListeners.length)
     throw new FixedPortError(`配置端口 ${port} 已被占用，但找不到可归属的 TCP 监听进程，拒绝启动浏览器`);
 
   // 探活本身会花时间；复探之后重新取快照，快照变化说明端点身份可能已换，必须重启判断而非杀旧 PID。
-  const currentPids = await listenerSnapshot(port, deps);
+  const currentListeners = await listenerSnapshot(port, deps);
   await assertFixedPortGuards(port, deps);
-  if (!samePids(observedPids, currentPids)) {
+  if (!sameListenerProcesses(observedListeners, currentListeners)) {
     if (restartCount >= 3) throw new FixedPortError(`配置端口 ${port} 的监听进程持续变化，拒绝执行破坏性操作`);
     return prepareFixedPortAttempt(port, deps, restartCount + 1, launchChecked);
   }
@@ -457,14 +480,14 @@ async function prepareFixedPortAttempt(
   await assertFixedPortGuards(port, deps);
   if (destructiveProbe.ready) return { action: 'reuse', browser: destructiveProbe.browser };
   // 探活可能耗时，必须在它之后再逐 PID 确认 listener 身份；变化时宁可重启状态机。
-  const killPids = await listenerSnapshot(port, deps);
+  const killListeners = await listenerSnapshot(port, deps);
   await assertFixedPortGuards(port, deps);
-  if (!samePids(currentPids, killPids)) {
+  if (!sameListenerProcesses(currentListeners, killListeners)) {
     if (restartCount >= 3) throw new FixedPortError(`配置端口 ${port} 的监听进程持续变化，拒绝执行破坏性操作`);
     return prepareFixedPortAttempt(port, deps, restartCount + 1, launchChecked);
   }
 
-  const release = await reclaimFixedPortListeners(port, killPids, deps);
+  const release = await reclaimFixedPortListeners(port, killListeners, deps);
   await assertFixedPortGuards(port, deps);
   if (release.state === 'free') {
     if (release.killFailures.length)
@@ -495,10 +518,16 @@ async function recheckBeforeLaunch(
   return prepareFixedPortAttempt(port, deps, restartCount + 1, true);
 }
 
-async function listenerSnapshot(port: number, deps: Pick<FixedPortDependencies, 'listenerPids'>): Promise<number[]> {
+async function listenerSnapshot(
+  port: number,
+  deps: Pick<FixedPortDependencies, 'listenerPids' | 'processIdentity'>,
+): Promise<ListenerProcess[]> {
   try {
-    return normalizePids(await deps.listenerPids(port));
+    const pids = normalizePids(await deps.listenerPids(port));
+    // listener 枚举是最后一个 await；随后同步绑定 birth identity，PID 复用后快照必然不同。
+    return pids.map(pid => ({ pid, identity: captureProcessIdentity(pid, deps) }));
   } catch (cause) {
+    if (cause instanceof FixedPortError) throw cause;
     const detail = cause instanceof Error ? cause.message : String(cause);
     throw new FixedPortError(`枚举配置端口 ${port} 的 TCP 监听进程失败: ${detail}`, { cause });
   }
@@ -508,10 +537,34 @@ function normalizePids(pids: number[]): number[] {
   return [...new Set(pids)].filter(pid => Number.isInteger(pid) && pid > 0);
 }
 
-function samePids(left: number[], right: number[]): boolean {
+function normalizeListenerProcesses(listeners: ListenerProcess[]): ListenerProcess[] {
+  const normalized = new Map<number, string>();
+  for (const listener of listeners) {
+    if (!Number.isInteger(listener.pid) || listener.pid <= 0 || !listener.identity.trim()) continue;
+    normalized.set(listener.pid, listener.identity);
+  }
+  return [...normalized].map(([pid, identity]) => ({ pid, identity }));
+}
+
+function sameListenerProcesses(left: ListenerProcess[], right: ListenerProcess[]): boolean {
   if (left.length !== right.length) return false;
-  const rightSet = new Set(right);
-  return left.every(pid => rightSet.has(pid));
+  const rightByPid = new Map(right.map(listener => [listener.pid, listener.identity]));
+  return left.every(listener => rightByPid.get(listener.pid) === listener.identity);
+}
+
+function formatListenerProcesses(listeners: ListenerProcess[]): string {
+  return listeners.map(listener => `${listener.pid}@${listener.identity}`).join(', ');
+}
+
+function captureProcessIdentity(pid: number, deps: Pick<FixedPortDependencies, 'processIdentity'>): string {
+  try {
+    const identity = deps.processIdentity(pid).trim();
+    if (!identity) throw new Error('进程身份为空');
+    return identity;
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new FixedPortError(`无法确认 PID ${pid} 的进程实例: ${detail}，拒绝执行破坏性操作`, { cause });
+  }
 }
 
 function assertAuthority(port: number, deps: Pick<FixedPortDependencies, 'assertAuthority'>): void {
