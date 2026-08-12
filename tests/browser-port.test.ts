@@ -6,6 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   prepareFixedPort,
+  settleFixedPortLaunch,
+  reclaimFixedPortListeners,
   parseNetstatListeners,
   parseLsofListeners,
   type FixedPortDependencies,
@@ -91,6 +93,32 @@ test('prepareFixedPort: 忙端口先给并发冷启动就绪宽限；宽限内�
   });
   assert.deepEqual(await prepareFixedPort(24119, d), { action: 'reuse', browser: 'Chrome/grace' });
   assert.deepEqual(d.calls, ['probe:24119', 'state:24119', 'grace:24119']);
+});
+
+test('settleFixedPortLaunch: 启动器早退后重进固定端口判断；并发 CDP 在宽限内就绪则复用', async () => {
+  const d = dependencies({
+    probes: [{ ready: false }],
+    busyGraceProbes: [{ ready: true, browser: 'Chrome/post-exit-race' }],
+    states: [{ state: 'busy' }],
+  });
+  const earlyExit = new Error('浏览器进程在 CDP 就绪前退出(code=0, signal=null)');
+  const result = await settleFixedPortLaunch(24120, async () => {
+    d.calls.push('waitReady');
+    throw earlyExit;
+  }, d);
+  assert.deepEqual(result, { action: 'reuse', browser: 'Chrome/post-exit-race' });
+  assert.deepEqual(d.calls, ['waitReady', 'probe:24120', 'state:24120', 'grace:24120']);
+});
+
+test('settleFixedPortLaunch: 启动器早退且端口仍空闲时保留原始退出真因，不重复 spawn', async () => {
+  const d = dependencies({ probes: [{ ready: false }], states: [{ state: 'free' }] });
+  const earlyExit = new Error('code=7 fixture');
+  await assert.rejects(
+    () => settleFixedPortLaunch(24121, async () => { d.calls.push('waitReady'); throw earlyExit; }, d),
+    error => error === earlyExit,
+  );
+  assert.deepEqual(d.calls, ['waitReady', 'probe:24121', 'state:24121']);
+  assert.ok(!d.calls.some(call => call.startsWith('launch:')));
 });
 
 test('prepareFixedPort: 注入 launch 时启动前再检查；并发变健康就复用且不 spawn', async () => {
@@ -277,6 +305,25 @@ test('prepareFixedPort: 某个 kill 失败仍尝试其余 listener，并复查�
   };
   await assert.rejects(() => prepareFixedPort(24111, d), /未释放.*711: EPERM 711/s);
   assert.deepEqual(calls, ['kill:711', 'kill:712']);
+});
+
+test('reclaimFixedPortListeners: 早期 kill 失败仍尝试全部 PID，并同时报告最终端口状态和失败', async () => {
+  const calls: string[] = [];
+  const result = await reclaimFixedPortListeners(24122, [721, 722], {
+    killPid: pid => {
+      calls.push(`kill:${pid}`);
+      if (pid === 721) throw new Error('EPERM 721');
+    },
+    portState: async port => {
+      calls.push(`state:${port}`);
+      return { state: 'free' };
+    },
+    sleep: async ms => { calls.push(`sleep:${ms}`); },
+    releaseTimeoutMs: 0,
+    releasePollMs: 100,
+  });
+  assert.deepEqual(calls, ['kill:721', 'kill:722', 'state:24122']);
+  assert.deepEqual(result, { state: 'free', killFailures: ['721: EPERM 721'] });
 });
 
 test('prepareFixedPort: kill 后端口超时未释放则失败，绝不谎报可启动', async () => {

@@ -15,11 +15,14 @@ import { discoverCandidates, type BrowserKind } from './browser-discover';
 import { browserConfigPath, parseBrowserConfig, defaultArgs, effectiveBrowserPort, DEFAULT_PORT, DEFAULT_USER_DATA, type BrowserConfig } from './browser-config';
 import {
   prepareFixedPort,
+  settleFixedPortLaunch,
+  reclaimFixedPortListeners,
   FixedPortError,
   hasCdpWebSocket,
   lsofListenerArgs,
   parseNetstatListeners,
   parseLsofListeners,
+  type FixedPortDependencies,
   type PortState,
 } from './browser-port';
 
@@ -215,17 +218,27 @@ function killPid(pid: number): void {
   process.kill(pid, 'SIGKILL');
 }
 
-function prepareAndLaunch(cfg: BrowserConfig): ReturnType<typeof prepareFixedPort> {
-  setPort(cfg.port);
-  return prepareFixedPort(cfg.port, {
+function fixedPortDependencies(): Omit<FixedPortDependencies, 'launch'> {
+  return {
     probe: async () => probeReady(1000),
     busyGraceProbe: async () => probeReadySoon(3000),
     portState,
     listenerPids,
     killPid,
-    launch: async () => launch(cfg.exe, cfg.args, cfg.port, cfg.userData),
     sleep,
+  };
+}
+
+function prepareAndLaunch(cfg: BrowserConfig): ReturnType<typeof prepareFixedPort> {
+  setPort(cfg.port);
+  return prepareFixedPort(cfg.port, {
+    ...fixedPortDependencies(),
+    launch: async () => launch(cfg.exe, cfg.args, cfg.port, cfg.userData),
   });
+}
+
+function settleLaunchedPort(port: number): ReturnType<typeof settleFixedPortLaunch> {
+  return settleFixedPortLaunch(port, () => waitReady(), fixedPortDependencies());
 }
 
 /** 读配置并同步 transport 端口。无配置返回 null(交由调用方 bootstrap)。 */
@@ -250,7 +263,8 @@ async function coldStart(cfg: BrowserConfig | null): Promise<ColdStartResult> {
     try {
       decision = await prepareAndLaunch(cfg);
       if (decision.action === 'reuse') return { reused: true, browser: decision.browser, userData: cfg.userData };
-      await waitReady();
+      const settled = await settleLaunchedPort(cfg.port);
+      if (settled.action === 'reuse') return { reused: true, browser: settled.browser, userData: cfg.userData };
     }
     catch (cause) {
       killLast();
@@ -277,7 +291,8 @@ async function coldStart(cfg: BrowserConfig | null): Promise<ColdStartResult> {
     try {
       const decision = await prepareAndLaunch({ exe, kind: c.kind, args, port, userData });
       if (decision.action === 'reuse') return { reused: true, browser: decision.browser, userData };
-      await waitReady();
+      const settled = await settleLaunchedPort(port);
+      if (settled.action === 'reuse') return { reused: true, browser: settled.browser, userData };
     }
     catch (cause) {
       killLast();
@@ -322,15 +337,8 @@ export async function killBrowser(): Promise<KillResult> {
   catch { return { ok: false, port: 9222, reason: 'broken' }; }
   const port = cfg.port;
   const pids = await listenerPids(port);
-  for (const pid of pids) {
-    try { killPid(pid); }
-    catch { return { ok: false, port, reason: 'stillUp' }; }
-  }
-  for (let i = 0; i <= 10; i++) {
-    const state = await portState(port);
-    if (state.state === 'free') return { ok: true, port, reason: pids.length ? 'killed' : 'noProcess' };
-    if (state.state === 'unknown') return { ok: false, port, reason: 'stillUp' };
-    if (i < 10) await sleep(300);
-  }
-  return { ok: false, port, reason: 'stillUp' };
+  const release = await reclaimFixedPortListeners(port, pids, { killPid, portState, sleep });
+  return release.state === 'free' && release.killFailures.length === 0
+    ? { ok: true, port, reason: pids.length ? 'killed' : 'noProcess' }
+    : { ok: false, port, reason: 'stillUp' };
 }

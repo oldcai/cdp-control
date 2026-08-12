@@ -38,6 +38,61 @@ export interface FixedPortDependencies {
   releasePollMs?: number;
 }
 
+export type ListenerReclaimResult =
+  | { state: 'free'; killFailures: string[] }
+  | { state: 'busy'; killFailures: string[] }
+  | { state: 'unknown'; reason: string; killFailures: string[] };
+
+type ListenerReclaimDependencies = Pick<
+  FixedPortDependencies,
+  'killPid' | 'portState' | 'sleep' | 'releaseTimeoutMs' | 'releasePollMs'
+>;
+
+/**
+ * 启动后的就绪等待失败时，重新进入不含 spawn 的固定端口状态机。
+ * 并发实例若已在权威端口就绪则复用；若端口最终仍可启动，则保留原始启动失败真因。
+ */
+export async function settleFixedPortLaunch(
+  port: number,
+  waitReady: () => Promise<void>,
+  deps: Omit<FixedPortDependencies, 'launch'>,
+): Promise<FixedPortAction> {
+  try {
+    await waitReady();
+    return { action: 'launch', port };
+  } catch (cause) {
+    const recovered = await prepareFixedPort(port, deps);
+    if (recovered.action === 'reuse') return recovered;
+    throw cause;
+  }
+}
+
+/** 尝试整组 listener 后轮询端口；调用方同时拿到最终状态与全部 kill 失败。 */
+export async function reclaimFixedPortListeners(
+  port: number,
+  pids: number[],
+  deps: ListenerReclaimDependencies,
+): Promise<ListenerReclaimResult> {
+  const killFailures: string[] = [];
+  for (const pid of pids) {
+    try { deps.killPid(pid); }
+    catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      killFailures.push(`${pid}: ${detail}`);
+    }
+  }
+
+  const timeoutMs = deps.releaseTimeoutMs ?? 3000;
+  const pollMs = deps.releasePollMs ?? 300;
+  const attempts = Math.floor(timeoutMs / pollMs);
+  for (let i = 0; i <= attempts; i++) {
+    const release = await deps.portState(port);
+    if (release.state !== 'busy') return { ...release, killFailures };
+    if (i < attempts) await deps.sleep(pollMs);
+  }
+  return { state: 'busy', killFailures };
+}
+
 /**
  * 配置端口是权威值：这里只会返回复用，或允许在传入的同一个端口启动。
  * 忙端口只有在能归属全部 listener、最终复探仍非健康、全部 kill 成功且确认释放后才可启动。
@@ -101,31 +156,15 @@ async function prepareFixedPortAttempt(
     return prepareFixedPortAttempt(port, deps, restartCount + 1, launchChecked);
   }
 
-  const killFailures: string[] = [];
-  for (const pid of killPids) {
-    try { deps.killPid(pid); }
-    catch (cause) {
-      const detail = cause instanceof Error ? cause.message : String(cause);
-      killFailures.push(`${pid}: ${detail}`);
-    }
+  const release = await reclaimFixedPortListeners(port, killPids, deps);
+  if (release.state === 'free') {
+    if (release.killFailures.length) throw new FixedPortError(`配置端口 ${port} 的监听进程结束失败(${release.killFailures.join('; ')})；端口现已释放，但拒绝继续启动`);
+    return recheckBeforeLaunch(port, deps, restartCount);
   }
-
-  const timeoutMs = deps.releaseTimeoutMs ?? 3000;
-  const pollMs = deps.releasePollMs ?? 300;
-  const attempts = Math.floor(timeoutMs / pollMs);
-  for (let i = 0; i <= attempts; i++) {
-    const release = await deps.portState(port);
-    if (release.state === 'free') {
-      if (killFailures.length) throw new FixedPortError(`配置端口 ${port} 的监听进程结束失败(${killFailures.join('; ')})；端口现已释放，但拒绝继续启动`);
-      return recheckBeforeLaunch(port, deps, restartCount);
-    }
-    if (release.state === 'unknown') {
-      const failure = killFailures.length ? `；监听进程结束失败(${killFailures.join('; ')})` : '';
-      throw new FixedPortError(`结束监听进程后无法确认配置端口 ${port} 的状态: ${release.reason}${failure}，拒绝启动浏览器`);
-    }
-    if (i < attempts) await deps.sleep(pollMs);
+  const failure = release.killFailures.length ? `；监听进程结束失败(${release.killFailures.join('; ')})` : '';
+  if (release.state === 'unknown') {
+    throw new FixedPortError(`结束监听进程后无法确认配置端口 ${port} 的状态: ${release.reason}${failure}，拒绝启动浏览器`);
   }
-  const failure = killFailures.length ? `；监听进程结束失败(${killFailures.join('; ')})` : '';
   throw new FixedPortError(`结束监听进程后配置端口 ${port} 超时未释放${failure}，拒绝启动浏览器`);
 }
 
