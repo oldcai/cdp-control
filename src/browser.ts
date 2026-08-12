@@ -17,6 +17,7 @@ import {
   prepareFixedPort,
   FixedPortError,
   hasCdpWebSocket,
+  killListenerPids,
   lsofListenerArgs,
   parseNetstatListeners,
   parseLsofListeners,
@@ -25,7 +26,7 @@ import {
 } from './browser-port';
 
 export interface EnsureResult { ready: boolean; started: boolean; browser?: string; userData?: string; }
-export interface KillResult { ok: boolean; port: number; reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken'; }
+export interface KillResult { ok: boolean; port: number; reason: 'killed' | 'noProcess' | 'killFailed' | 'stillUp' | 'noConfig' | 'broken'; }
 
 let child: ReturnType<typeof spawn> | null = null;
 const execFileAsync = promisify(execFile);
@@ -326,13 +327,12 @@ export async function killBrowser(): Promise<KillResult> {
   catch { return { ok: false, port: 9222, reason: 'broken' }; }
   const port = cfg.port;
   const pids = await listenerPids(port);
-  for (const pid of pids) {
-    try { killPid(pid); }
-    catch { return { ok: false, port, reason: 'stillUp' }; }
-  }
+  const killFailures = killListenerPids(pids, killPid);
   for (let i = 0; i <= 10; i++) {
     const state = await portState(port);
-    if (state.state === 'free') return { ok: true, port, reason: pids.length ? 'killed' : 'noProcess' };
+    if (state.state === 'free') return killFailures.length
+      ? { ok: false, port, reason: 'killFailed' }
+      : { ok: true, port, reason: pids.length ? 'killed' : 'noProcess' };
     if (state.state === 'unknown') return { ok: false, port, reason: 'stillUp' };
     if (i < 10) await sleep(300);
   }

@@ -13,6 +13,7 @@ import {
   type PortState,
   FixedPortError,
   hasCdpWebSocket,
+  killListenerPids,
   lsofListenerArgs,
   waitForCdpReady,
 } from '../src/browser-port.ts';
@@ -51,6 +52,16 @@ test('waitForCdpReady: 早退宽限结束仍无健康 CDP 时保留真实退出�
     now: () => now,
   }, 20_000, 3_000, 1_000), /code=7/);
   assert.equal(now, 3_000);
+});
+
+test('killListenerPids: 单个 listener 结束失败仍尝试其余 PID，并聚合真因', () => {
+  const attempted: number[] = [];
+  const failures = killListenerPids([711, 712], pid => {
+    attempted.push(pid);
+    if (pid === 711) throw new Error('EPERM fixture');
+  });
+  assert.deepEqual(attempted, [711, 712]);
+  assert.deepEqual(failures, ['711: EPERM fixture']);
 });
 
 function dependencies(options: {

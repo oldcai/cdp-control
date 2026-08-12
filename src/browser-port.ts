@@ -77,6 +77,19 @@ export async function waitForCdpReady(
   throw new Error('浏览器启动超时');
 }
 
+/** 对全部 listener 做 best-effort 回收；单个失败不阻断其余 PID，并保留每个真因。 */
+export function killListenerPids(pids: number[], killPid: (pid: number) => void): string[] {
+  const failures: string[] = [];
+  for (const pid of pids) {
+    try { killPid(pid); }
+    catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      failures.push(`${pid}: ${detail}`);
+    }
+  }
+  return failures;
+}
+
 export interface FixedPortDependencies {
   probe(port: number): Promise<ProbeResult>;
   /** 忙端口进入破坏性流程前的有界就绪宽限；运行时用于等待并发冷启动。 */
@@ -153,14 +166,7 @@ async function prepareFixedPortAttempt(
     return prepareFixedPortAttempt(port, deps, restartCount + 1, launchChecked);
   }
 
-  const killFailures: string[] = [];
-  for (const pid of killPids) {
-    try { deps.killPid(pid); }
-    catch (cause) {
-      const detail = cause instanceof Error ? cause.message : String(cause);
-      killFailures.push(`${pid}: ${detail}`);
-    }
-  }
+  const killFailures = killListenerPids(killPids, deps.killPid);
 
   const timeoutMs = deps.releaseTimeoutMs ?? 3000;
   const pollMs = deps.releasePollMs ?? 300;
