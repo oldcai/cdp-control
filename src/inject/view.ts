@@ -119,17 +119,24 @@ setResult((async () => {
   if (__CDP_ARG__.budget == null) {
     lines = formatView(v, __CDP_ARG__.maxLen);
   } else if (focusEl) {
-    const findFocusRef = (n: ViewNode): number | null => {
-      if (n.el === focusEl) return n.budgetRef ?? n.ref ?? null;
+    const findFocusNode = (n: ViewNode): ViewNode | null => {
+      if (n.el === focusEl) return n;
       for (const kid of n.kids) {
-        const found = findFocusRef(kid);
+        const found = findFocusNode(kid);
         if (found != null) return found;
       }
       return null;
     };
-    const rebuiltFocusRef = findFocusRef(v);
-    if (rebuiltFocusRef == null) {
+    const rebuiltFocus = findFocusNode(v);
+    const rebuiltFocusRef = rebuiltFocus?.budgetRef ?? rebuiltFocus?.ref ?? null;
+    if (!rebuiltFocus || rebuiltFocusRef == null) {
       return setResult({ ok: false, err: `focus ref=${__CDP_ARG__.focus} 对应元素不在当前整页视图树中` });
+    }
+    if (rebuiltFocus.budgetFoldable === false) {
+      return setResult({
+        ok: false,
+        err: `focus ref=${__CDP_ARG__.focus} 只代表合并文本的末段元素，不能作为独立焦点`,
+      });
     }
     lines = renderFocusedBudgetedView(v, __CDP_ARG__.budget, rebuiltFocusRef, __CDP_ARG__.maxLen).lines;
   } else {

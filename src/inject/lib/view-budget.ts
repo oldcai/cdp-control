@@ -403,6 +403,12 @@ export function renderFocusedBudgetedView(
   const path = focusPath(root, focusRef);
   if (!path) throw new Error(`focus ref=${focusRef} 不在当前视图树中`);
   const focus = path[path.length - 1];
+  // ignore-links 会把相邻文本合并成一行，但该行的 ref 只指向末段真实元素。
+  // 若把整个合成节点当成焦点，会把 ref 不覆盖的相邻正文也强制展开，
+  // 既违反焦点语义，也可能让输出远超预算。这种句柄必须改用可完整展开的祖先 ref。
+  if (focus.budgetFoldable === false) {
+    throw new Error(`focus ref=${focusRef} 只代表合并文本的末段元素，不能作为独立焦点`);
+  }
   const pathNodes = new Set(path);
   const focusNodes = collectSubtree(focus);
   const expandedShadowRefs = new Set<number>();
