@@ -11,6 +11,7 @@ import { logs, cmdListen } from './monitor';
 import { ensureBrowser, killBrowser } from './browser';
 import { runScript } from './run-script';
 import { runRecipe } from './recipe-runner';
+import { parseRefArg } from './target-arg';
 
 const api: any = { ...coreApi, logs, ensure: ensureBrowser, kill: killBrowser };
 // recipe:暴露给 run 脚本显式取站点摘要(命中返回 {lines},未命中 null)。
@@ -138,7 +139,7 @@ targetCmd('view', '感知:命中 recipe 输出站点摘要,否则整页结构树
   .option('--max-len <n>', '文本截断阈值(字符数);缺省不截断,设值则所有文本片截到 n 并补省略号')
   .action(async (n, opts) => {
     const sel = readOptFile(opts.selectorFile);
-    const ref = n != null ? Number(n) : undefined;
+    const ref = parseRefArg(n, 'view');
     if (ref != null && sel) throw new Error('ref 序号与 --selector-file 只能选其一');
     if ((opts.scrollPages != null || opts.scrollTo != null) && !opts.scrollToLoad) {
       throw new Error('--scroll-pages / --scroll-to 必须与 --scroll-to-load 配合使用');
@@ -303,7 +304,7 @@ targetCmd('info', '列目标元素祖先链(tag/id/class/语义 data-*/aria/role
   .argument('<n>', 'view 输出的 ref 序号(穿透 shadow)')
   .option('--ancestor <k>', '按 ref 定位后向上爬 K 层父级再列(默认 0)')
   .action(async (n, opts) => {
-    const r = await api.info(await needTarget(opts.target), Number(n), opts.ancestor != null ? Number(opts.ancestor) : undefined);
+    const r = await api.info(await needTarget(opts.target), parseRefArg(n, 'info')!, opts.ancestor != null ? Number(opts.ancestor) : undefined);
     printInfoChain(r);
   });
 
@@ -311,7 +312,7 @@ targetCmd('article', '以 ref 为根提取格式友好的 Markdown 文章(保序
   .argument('<n>', 'view 输出的 ref 序号(穿透 shadow)')
   .option('--ancestor <k>', '按 ref 定位后向上爬 K 层父级再提取(默认 0)')
   .action(async (n, opts) => {
-    const r = await api.article(await needTarget(opts.target), Number(n), opts.ancestor != null ? Number(opts.ancestor) : undefined);
+    const r = await api.article(await needTarget(opts.target), parseRefArg(n, 'article')!, opts.ancestor != null ? Number(opts.ancestor) : undefined);
     if (r?.refInvalid) { printRefInvalid(r); return; }
     if (!r?.lines?.length) { console.log('(空文章)'); return; }
     console.log(r.lines.join('\n'));
@@ -338,6 +339,10 @@ targetCmd('logs', '读 target 控制台日志(常驻 daemon,支持过滤)')
     console.log(`→ ${t.title} ${t.url}`);
     for (const e of entries) { const ts = new Date(e.ts).toTimeString().slice(0, 8); const loc = (e.line != null) ? ` (${e.line}:${e.col ?? ''})` : ''; const argsText = (e.args || []).map((a: any) => a == null ? 'undefined' : (typeof a === 'string' ? a : JSON.stringify(a))).join(' '); console.log(`[${ts}][${e.level}] ${argsText}${loc}`); }
   });
+
+// 多余的位置参数一律报错(commander 12 默认是静默丢掉)。实测:弱模型爱写
+// `view <url>` / `click <sel> <url>`,被静默吞掉后它以为自己已经在目标页上,后面全盘错。
+for (const c of program.commands) c.allowExcessArguments(false);
 
 if (require.main === module) {
   program.parseAsync(process.argv).catch((err: any) => {
