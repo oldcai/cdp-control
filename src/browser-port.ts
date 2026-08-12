@@ -412,6 +412,7 @@ async function prepareFixedPortAttempt(
     if (!deps.launch) return { action: 'launch', port };
     if (launchChecked) {
       await deps.launch(port);
+      await assertFixedPortGuards(port, deps);
       return { action: 'launch', port };
     }
     // 再走一轮完整状态判断，收紧 bind 探测与 spawn 之间的 TOCTOU 窗口。
@@ -486,7 +487,10 @@ async function recheckBeforeLaunch(
   deps: FixedPortDependencies,
   restartCount: number,
 ): Promise<FixedPortAction> {
-  if (!deps.launch) return { action: 'launch', port };
+  if (!deps.launch) {
+    await assertFixedPortGuards(port, deps);
+    return { action: 'launch', port };
+  }
   if (restartCount >= 3) throw new FixedPortError(`配置端口 ${port} 的状态持续变化，拒绝启动浏览器`);
   return prepareFixedPortAttempt(port, deps, restartCount + 1, true);
 }

@@ -826,6 +826,29 @@ test('prepareFixedPort: 注入 launch 时两次确认空闲才在原配置端口
   assert.deepEqual(d.calls, ['probe:24113', 'state:24113', 'probe:24113', 'state:24113', 'launch:24113']);
 });
 
+test('prepareFixedPort: async launch 期间配置改口时不得返回 launch success', async () => {
+  const authorityChanged = new Error('authority changed during launch fixture');
+  let authoritative = true;
+
+  await assert.rejects(
+    () =>
+      prepareFixedPort(24137, {
+        assertAuthority: () => {
+          if (!authoritative) throw authorityChanged;
+        },
+        probe: async () => ({ ready: false }),
+        portState: async () => ({ state: 'free' }),
+        listenerPids: async () => [],
+        killPid: () => undefined,
+        launch: async () => {
+          authoritative = false;
+        },
+        sleep: async () => undefined,
+      }),
+    error => error === authorityChanged,
+  );
+});
+
 test('prepareFixedPort: 最终空闲检查期间权威端口改变时在 spawn 前中止', async () => {
   const authorityChanged = new Error('authority changed before spawn fixture');
   const calls: string[] = [];
