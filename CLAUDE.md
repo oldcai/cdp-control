@@ -15,6 +15,8 @@ npm install      # 首次:Biome/esbuild/typescript/@types/node/commander(运行�
 npm run lint     # Biome lint+格式校验、依赖边界检查、Node/集成 harness 类型检查
 npm run build    # tsc --noEmit + esbuild(编译 + 打包注入脚本)
 npm test         # node:test 跑 tests/*.test.ts(零运行时依赖)
+npm run test:pack        # npm pack → 精确白名单 → 临时安装 → 真跑已安装 CLI
+npm run publish:dry-run  # 隔离 stage 翻 private 后只做 npm publish --dry-run,绝不发布
 ```
 
 实时规则目录 = `<CDP_HOME>/rules`(默认 `~/.cdp-control/rules`):本机默认路径是**符号链接指向 `rules/`**(用户规则=根本规则,运行时读写直接落 git 工作树的 rules,**无覆盖问题**);干净环境是真目录,`rules-store.ts` seed-once 缺文件时从 `rules/` 拷默认。**build 不清不覆盖**(修 clobber)。
@@ -28,7 +30,23 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 
 **规则是数据非代码,不住 dist**:fold/ignore-links 运行时可写数据住 `<CDP_HOME>/rules`(默认 `~/.cdp-control/rules`;本机默认路径符号链接到 `rules/`),内置默认在 `rules/`(入库,publish 随包),干净环境由 `rules-store.ts` seed-once 拷贝;recipe 作者代码则直接读包/仓库 `rules/recipes/`,不做数据 home 镜像(见「规则存储」)。
 
-**全局 CLI(`npm link`)**:`package.json` 的 `bin.cdp-control` → `dist/cdp.js`(首行 shebang 由 `build.mjs` 给 cdp bundle 加 banner,只加这一次、勿配到 standalone/inject 产物)。`npm link` 后任意目录可敲 `cdp-control`;SKILL.md 全用此命令。`private:true` 不影响 npm link;publish 前翻 private + `files:["dist","rules","skills"]`。
+**全局 CLI(`npm link`)**:`package.json` 的 `bin.cdp-control` → `dist/cdp.js`(首行 shebang 由 `build.mjs` 给 cdp bundle 加 banner,只加这一次、勿配到 standalone/inject 产物)。`npm link` 后任意目录可敲 `cdp-control`;SKILL.md 全用此命令。`private:true` 不影响 npm link;发布范围由 `files:["dist","rules","skills"]` 与 npm 自动纳入的 package.json/README/LICENSE 共同决定,并由 pack 冒烟锁死。
+
+## 版本与发布
+
+当前 `1.0.0` 仍是 `private:true` 的未发布开发版本:仓库没有已发布版本或 tag,不得把版本号本身当作已发布证据。`CHANGELOG.md` 的 `[Unreleased]` 是待发布事实源。
+
+**SemVer 判断范围**:CLI 命令/位置参数/flag(名称、类型、默认值、语义)、stdout/stderr 与退出码;注入侧 `__CDP_ARG__`、`globalThis.__cdpResult`、footer 及既有参数/结果形态;`fold.csv` 五列、`ignore-links.csv` 三列与 recipe 导出/API;`bin` 名、最低 Node 版本和安装包布局,都属于公共契约。
+
+- **patch**:不改变公共契约的 bugfix、性能优化、内部重构、测试/文档/CI/构建/pack 修正,以及现有格式内的 selector/规则数据纠错。注入实现可改,但既有参数与结果契约必须不变。
+- **minor**:向后兼容的新能力,如新增命令、默认不改变旧行为的可选 flag/参数、可选结果字段、新注入入口、新站点 recipe,或旧规则仍可原样解析的可选格式扩展。
+- **major**:删除/改名命令或 flag,改变 flag 类型/默认值/语义、位置参数语法、机器可读输出或退出码;破坏 `__CDP_ARG__`/`__cdpResult`/footer 或既有字段语义;改变规则路径、分隔符、必填列/列序/glob 语义或 recipe API 使旧文件失效;提高最低 Node、改变 bin 名或安装布局。允许激进重构,但已有发布后的不兼容契约变更必须 major。
+
+**谁更新版本**:普通功能/修复 PR 只更新 `[Unreleased]`,不各自 bump。指定发版负责人在独立 release PR 中按该批次最高影响级别统一决定版本;已有正式版本后的发布用 `npm version <patch|minor|major> --no-git-tag-version` 同步 `package.json` 与 `package-lock.json`。CLI 版本不另存一份:build 从 manifest 注入 `__CDP_VERSION__`,pack 冒烟断言安装后的 `--version` 与 tarball 元数据一致。首次正式发布若范围仍为 1.0.0,可沿用这个未发布占位号而不执行递增命令,但必须核对 manifest/lock 一致。负责人同时把条目归档为 `[x.y.z] - YYYY-MM-DD`;只有真实发布完成后才创建匹配的 `vX.Y.Z` tag。
+
+**发布演练**:`npm run publish:dry-run` 先要求源包仍为 `private:true`,再复制最小发布源到隔离 stage、只在 stage 翻成 `private:false`,过滤 npm 凭据并固定无效 registry,最后硬编码执行 `npm publish --dry-run`。脚本没有非 dry-run 分支,不改源 manifest、不读写用户 npmrc;真实发布必须另走显式 release PR。发版前 pack 冒烟与 dry-run 都必须通过。
+
+首次正式发布前仍可按本项目原则激进演进;一旦正式发布,本节 SemVer/CHANGELOG 规则就是发布契约,文件末尾的历史说明不构成豁免。
 
 ## 源码结构(两层分离)
 
@@ -172,6 +190,7 @@ Node 侧统一 `invoke(target, expr)` 执行注入脚本并解包:成功返回�
 
 - `tests/*.test.ts` 用 Node 内置 `node:test`+`node:assert/strict`,零运行时依赖。
 - `npm run test:integration` 先重建 `dist/` 并用 `tsconfig.integration.json` 类型检查 harness,再用 `tests/integration/*.test.ts` 启动 `node:http` 本地 fixture 与隔离的 `--headless=new` 真浏览器;所有驱动命令均是 `node dist/cdp.js <args>`。harness 用项目 `tmp/` 下的临时 `CDP_HOME`、`CDP_NO_AUTOSTART=1`、≥40000 的动态 CDP 端口和随机 fixture 端口,只按自己记录的 PID/进程组清理;本地无可用浏览器时显式打印 `SKIPPED` 并退出 0。CI 另设 `CDP_INTEGRATION_REQUIRE_BROWSER=1`,使 hosted runner 发现不到浏览器时硬失败,禁止静默假绿。
+- `npm run test:pack` 在项目 `tmp/` 下建临时目录,执行真实 `npm pack`,校验 tarball 顶层恰为 LICENSE/README.md/dist/package.json/rules/skills,再由临时 consumer 执行 `npm install <tarball>` 和安装后的 `cdp-control --help`/`cdp-control kill`。`kill` 在隔离 `CDP_HOME` 无 browser.json 时直接短路,同时设 `CDP_NO_AUTOSTART=1` 与高位端口兜底;finally 删除安装目录与 tarball。CI 在 ubuntu/windows/macOS 各跑一遍。
 - CI 的独立 `integration` job 在 ubuntu/windows/macOS hosted runner 上用最低支持版本 Node 22.6.0 跑完整链路;三平台镜像均有现有 `browser-discover.ts` 通用候选可发现的 Chrome/Edge,故 macOS 也纳入必须绿,workflow 不指定 runner 浏览器路径。CI 同时设 `CDP_INTEGRATION_DIAGNOSTICS=1`,逐条输出带 `①`…`⑧` 场景名、退出状态及 stdout/stderr 的命令记录。
 - 集成覆盖:`view` 的 ref/value/语义状态、`find --text` 追加 ref、坐标 `click`+变更反馈、`fill` value 回显、持久 fold、DOM 删除后 refInvalid/recovered、`article` Markdown、selector 未命中的非零错误路径。
 - 纯函数单测:`view-utils.ts`、`view-format.ts`(formatView/markText)、`genSel.ts`、`find-root.ts`(refElement/climbAncestors/classifyRef)、`ref-registry.test.ts`(WeakRef 形态/复号追加/parentRef 刷新/WeakMap 只查)、`click-position.ts`(中心可用性/跨 shadow 命中链)、`click-events.ts`(moved/pressed/released 顺序与参数)、`folds.ts`(parseRules/domainMatch/pathMatch/matchFolds/loadFolds,临时 CDP_FOLD_FILE)、`ignore-links.ts`(hrefForMatch/globToRegExp/linkRuleMatch/parseLinkRules + 浏览器侧 linkIgnored)、`target-arg.ts`(normArg 防呆)、`keys.ts`(parseKeySpec)、`transport.ts`(resolveTarget)、`port.ts`(portFree/findFreePort,真实 bind 高位端口不 mock)。

@@ -11,13 +11,15 @@
  */
 import { build } from 'esbuild';
 import { execSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = join(fileURLToPath(import.meta.url), '..');
 const src = join(__dirname, 'src');
 const dist = join(__dirname, 'dist');
+const packageVersion = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version;
+if (typeof packageVersion !== 'string' || packageVersion.length === 0) throw new Error('package.json 缺少 version');
 
 // 注入脚本统一的返回值 footer(读全局 + 删除 + 返回)。
 // async:支持入口把 __cdpResult 设成 promise(如 view --scroll-to-load 先异步滚动再建树),
@@ -41,6 +43,7 @@ async function main() {
     external: ['node:fs', 'node:path'],
     // 只给 cdp bundle 加 shebang,支持 `npm link` 全局直接执行 cdp-control(dist 每次重建覆盖)。
     banner: { js: '#!/usr/bin/env node' },
+    define: { __CDP_VERSION__: JSON.stringify(packageVersion) },
     logLevel: 'info',
   });
 

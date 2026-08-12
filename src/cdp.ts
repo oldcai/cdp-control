@@ -20,6 +20,8 @@ import { runScript } from './run-script';
 import { runRecipe } from './recipe-runner';
 import type { Target } from './transport';
 
+declare const __CDP_VERSION__: string;
+
 // recipe:暴露给 run 脚本显式取站点摘要(命中返回 {lines},未命中 null)。
 async function recipe(target: Target, opts: unknown): Promise<{ lines: string[] } | null> {
   return runRecipe(target.url, api, target, opts);
@@ -77,7 +79,7 @@ function targetCmd(name: string, desc: string) {
 }
 
 // —— 不需要 target 的命令 ——
-program.name('cdp').version('1.0.0').description('CDP 浏览器控制(取代 chrome-devtools MCP)');
+program.name('cdp').version(__CDP_VERSION__).description('CDP 浏览器控制(取代 chrome-devtools MCP)');
 
 program
   .command('list')
