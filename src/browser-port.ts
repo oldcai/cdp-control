@@ -17,8 +17,10 @@ export class FixedPortError extends Error {}
 export class FixedPortLaunchAttempt<Process> {
   launched: Process | null = null;
 
-  record(process: Process): void {
+  /** 记录终止所有权，并返回不受后续 release 影响的本轮精确句柄。 */
+  record(process: Process): Process {
     this.launched = process;
+    return process;
   }
 
   release(process: Process): void {

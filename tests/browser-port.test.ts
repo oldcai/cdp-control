@@ -41,11 +41,12 @@ test('FixedPortLaunchAttempt: 未 spawn 的本轮清理不碰历史进程，reco
   assert.deepEqual(killed, []);
   assert.deepEqual(historical, { pid: 401 });
 
-  attempt.record(current);
+  const launched = attempt.record(current);
   attempt.release(historical);
   assert.equal(attempt.launched, current);
   attempt.release(current);
   assert.equal(attempt.launched, null);
+  assert.equal(launched, current, '释放终止所有权后仍须保留本轮 waitReady 的精确句柄');
 
   attempt.record(current);
   attempt.cleanup(process => killed.push(process));

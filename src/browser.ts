@@ -303,22 +303,30 @@ function fixedPortDependencies(assertAuthority?: AuthorityGuard): Omit<FixedPort
   return dependencies;
 }
 
-function recordLaunchAttempt(attempt: FixedPortLaunchAttempt<BrowserChild>, launched: BrowserChild): void {
-  attempt.record(launched);
+function recordLaunchAttempt(attempt: FixedPortLaunchAttempt<BrowserChild>, launched: BrowserChild): BrowserChild {
+  const exactLaunch = attempt.record(launched);
   launched.once('exit', () => attempt.release(launched));
   if (launched.exitCode !== null || launched.signalCode !== null) attempt.release(launched);
+  return exactLaunch;
 }
 
-function prepareAndLaunch(
+async function prepareAndLaunch(
   cfg: BrowserConfig,
   assertAuthority: AuthorityGuard,
   attempt: FixedPortLaunchAttempt<BrowserChild>,
-): ReturnType<typeof prepareFixedPort> {
+): Promise<{
+  decision: Awaited<ReturnType<typeof prepareFixedPort>>;
+  launched: BrowserChild | null;
+}> {
   setPort(cfg.port);
-  return prepareFixedPort(cfg.port, {
+  let launched: BrowserChild | null = null;
+  const decision = await prepareFixedPort(cfg.port, {
     ...fixedPortDependencies(assertAuthority),
-    launch: async () => recordLaunchAttempt(attempt, await launch(cfg.exe, cfg.args, cfg.port, cfg.userData)),
+    launch: async () => {
+      launched = recordLaunchAttempt(attempt, await launch(cfg.exe, cfg.args, cfg.port, cfg.userData));
+    },
   });
+  return { decision, launched };
 }
 
 function settleLaunchedPort(
@@ -443,9 +451,10 @@ async function coldStartAuthorityAttempt(
     mkdirSync(cfg.userData, { recursive: true });
     let decision: Awaited<ReturnType<typeof prepareFixedPort>>;
     try {
-      decision = await prepareAndLaunch(cfg, assertAuthority, launchAttempt);
+      const prepared = await prepareAndLaunch(cfg, assertAuthority, launchAttempt);
+      decision = prepared.decision;
       if (decision.action === 'reuse') return { reused: true, browser: decision.browser, userData: cfg.userData };
-      const settled = await settleLaunchedPort(cfg.port, assertAuthority, launchAttempt.launched);
+      const settled = await settleLaunchedPort(cfg.port, assertAuthority, prepared.launched);
       if (settled.action === 'reuse') return { reused: true, browser: settled.browser, userData: cfg.userData };
     } catch (cause) {
       if (cause instanceof BrowserAuthorityChanged) throw cause;
@@ -472,13 +481,14 @@ async function coldStartAuthorityAttempt(
     const exe = c.exe;
     const args = defaultArgs();
     try {
-      const decision = await prepareAndLaunch(
+      const prepared = await prepareAndLaunch(
         { exe, kind: c.kind, args, port, userData },
         assertAuthority,
         launchAttempt,
       );
+      const decision = prepared.decision;
       if (decision.action === 'reuse') return { reused: true, browser: decision.browser, userData };
-      const settled = await settleLaunchedPort(port, assertAuthority, launchAttempt.launched);
+      const settled = await settleLaunchedPort(port, assertAuthority, prepared.launched);
       if (settled.action === 'reuse') return { reused: true, browser: settled.browser, userData };
     } catch (cause) {
       launchAttempt.cleanup(terminateChild);
