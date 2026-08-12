@@ -120,6 +120,23 @@ test('combineAddressStates: localhost 跳过关闭的 IPv6 地址族，保留 IP
   );
 });
 
+test('combineAddressStates: 任一非可忽略 unknown 都压过 busy，阻止破坏性回收', () => {
+  assert.deepEqual(
+    combineAddressStates([
+      { address: '127.0.0.1', state: 'busy' },
+      { address: '192.0.2.44', state: 'unknown', code: 'EACCES', reason: 'connect 192.0.2.44:9222 EACCES' },
+    ]),
+    { state: 'unknown', reason: 'connect 192.0.2.44:9222 EACCES' },
+  );
+  assert.deepEqual(
+    combineAddressStates([
+      { address: '127.0.0.1', state: 'busy' },
+      { address: '::1', state: 'unknown', code: 'EAFNOSUPPORT', reason: 'connect ::1 EAFNOSUPPORT' },
+    ]),
+    { state: 'busy' },
+  );
+});
+
 test('waitForCdpReady: 子进程早退后即使端口瞬时空闲也有界复探并发 CDP', async () => {
   let now = 0;
   let probes = 0;
@@ -745,6 +762,24 @@ test('parseNetstatListenersForHosts: DNS 多地址 PID 取并集并去重', () =
     'TCP 192.0.2.44:9222 0.0.0.0:0 LISTENING 668',
   ].join('\r\n');
   assert.deepEqual(parseNetstatListenersForHosts(out, 9222, ['192.0.2.44', '2001:db8::44']), [668, 669]);
+});
+
+test('parseLsofListenersForHosts: 全局有 direct 时不混入另一 host 的 IPv6 wildcard fallback', () => {
+  const out = ['p670', 'f7', 'tIPv4', 'n192.0.2.44:9222', 'p671', 'f8', 'tIPv6', 'n[::]:9222'].join('\n');
+  assert.deepEqual(parseLsofListenersForHosts(out, 9222, ['192.0.2.44', '198.51.100.7']), [670]);
+  assert.deepEqual(
+    parseLsofListenersForHosts(out.split('\n').slice(4).join('\n'), 9222, ['192.0.2.44', '198.51.100.7']),
+    [671],
+  );
+});
+
+test('parseNetstatListenersForHosts: 全局有 direct 时不混入另一 host 的 IPv6 wildcard fallback', () => {
+  const out = ['TCP 192.0.2.44:9222 0.0.0.0:0 LISTENING 672', 'TCP [::]:9222 [::]:0 LISTENING 673'].join('\r\n');
+  assert.deepEqual(parseNetstatListenersForHosts(out, 9222, ['192.0.2.44', '198.51.100.7']), [672]);
+  assert.deepEqual(
+    parseNetstatListenersForHosts(out.split('\r\n').slice(1).join('\r\n'), 9222, ['192.0.2.44', '198.51.100.7']),
+    [673],
+  );
 });
 
 test('parseLsofListeners: IPv6 合法非压缩写法与 lsof 压缩地址按同一端点匹配', () => {

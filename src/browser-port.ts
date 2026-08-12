@@ -81,14 +81,14 @@ export async function resolveSocketHosts(host: string, lookupAll: LookupAll): Pr
 
 const FAMILY_OFF = new Set(['EAFNOSUPPORT', 'EPFNOSUPPORT', 'ENETUNREACH', 'EADDRNOTAVAIL', 'EHOSTUNREACH', 'EINVAL']);
 
-/** 多地址 host 的探测结论：任一 busy 优先；仅跳过本机不可用的回环地址族。 */
+/** 多地址 host 的探测结论：非可忽略 unknown 优先于 busy；仅跳过本机不可用的回环地址族。 */
 export function combineAddressStates(states: AddressPortState[]): PortState {
-  if (states.some(state => state.state === 'busy')) return { state: 'busy' };
   const unknown = states.filter(
     (state): state is Extract<AddressPortState, { state: 'unknown' }> =>
       state.state === 'unknown' && !loopbackFamilyUnavailable(state.address, state.code),
   );
   if (unknown.length) return { state: 'unknown', reason: unknown.map(state => state.reason).join('; ') };
+  if (states.some(state => state.state === 'busy')) return { state: 'busy' };
   if (states.some(state => state.state === 'free')) return { state: 'free' };
   return { state: 'unknown', reason: '没有可用的本机地址族' };
 }
@@ -442,6 +442,19 @@ export function addressServes(addr: string, host: string, port: number, family?:
 
 /** 解析 Windows `netstat -ano`，只取服务目标端点的 TCP LISTENING PID。 */
 export function parseNetstatListeners(out: string, port: number, host = '127.0.0.1'): number[] {
+  return preferredListenerPids(parseNetstatListenerCandidates(out, port, host));
+}
+
+interface ListenerPidCandidates {
+  direct: number[];
+  fallback: number[];
+}
+
+function preferredListenerPids(candidates: ListenerPidCandidates): number[] {
+  return candidates.direct.length ? candidates.direct : candidates.fallback;
+}
+
+function parseNetstatListenerCandidates(out: string, port: number, host: string): ListenerPidCandidates {
   const pids: number[] = [];
   const dualStackFallbackPids: number[] = [];
   for (const line of out.split(/\r?\n/)) {
@@ -452,11 +465,15 @@ export function parseNetstatListeners(out: string, port: number, host = '127.0.0
     if (addressServes(columns[1], host, port)) addPid(pids, pid);
     else if (ipv6WildcardMayServeIpv4(columns[1], host, port)) addPid(dualStackFallbackPids, pid);
   }
-  return pids.length ? pids : dualStackFallbackPids;
+  return { direct: pids, fallback: dualStackFallbackPids };
 }
 
 /** 解析 POSIX `lsof ... -Fpnt`，按 process/fd/type/name 状态机取目标 listener PID。 */
 export function parseLsofListeners(out: string, port: number, host = '127.0.0.1'): number[] {
+  return preferredListenerPids(parseLsofListenerCandidates(out, port, host));
+}
+
+function parseLsofListenerCandidates(out: string, port: number, host: string): ListenerPidCandidates {
   const pids: number[] = [];
   const dualStackFallbackPids: number[] = [];
   let currentPid = 0;
@@ -481,17 +498,29 @@ export function parseLsofListeners(out: string, port: number, host = '127.0.0.1'
     if (addressServes(address, host, port, family)) addPid(pids, currentPid);
     else if (ipv6WildcardMayServeIpv4(address, host, port, family)) addPid(dualStackFallbackPids, currentPid);
   }
-  return pids.length ? pids : dualStackFallbackPids;
+  return { direct: pids, fallback: dualStackFallbackPids };
 }
 
 /** 对 DNS 解析出的全部数值地址取 listener PID 并集。 */
 export function parseLsofListenersForHosts(out: string, port: number, hosts: string[]): number[] {
-  return [...new Set(hosts.flatMap(host => parseLsofListeners(out, port, host)))];
+  return preferredListenerPids(
+    mergeListenerCandidates(hosts.map(host => parseLsofListenerCandidates(out, port, host))),
+  );
 }
 
 /** 对 DNS 解析出的全部数值地址取 listener PID 并集。 */
 export function parseNetstatListenersForHosts(out: string, port: number, hosts: string[]): number[] {
-  return [...new Set(hosts.flatMap(host => parseNetstatListeners(out, port, host)))];
+  return preferredListenerPids(
+    mergeListenerCandidates(hosts.map(host => parseNetstatListenerCandidates(out, port, host))),
+  );
+}
+
+/** 多地址必须先全局收集 direct；只有整组都无 direct 时才能采用保守 wildcard fallback。 */
+function mergeListenerCandidates(candidates: ListenerPidCandidates[]): ListenerPidCandidates {
+  return {
+    direct: [...new Set(candidates.flatMap(candidate => candidate.direct))],
+    fallback: [...new Set(candidates.flatMap(candidate => candidate.fallback))],
+  };
 }
 
 function addPid(pids: number[], pid: number): void {
