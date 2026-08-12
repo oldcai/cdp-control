@@ -40,9 +40,30 @@ export interface CommandResult {
   stderr: string;
 }
 
+function visibleOutput(output: string): string {
+  const visible = output.replace(/\r?\n$/, '');
+  return visible.length ? visible : '<empty>';
+}
+
+/** CI 日志统一带场景、退出状态与双流，语义断言失败时也能直接定位。 */
+export function formatCommandTranscript(stage: string, result: CommandResult): string {
+  return [
+    `场景「${stage}」命令结果: code=${result.code} signal=${result.signal ?? 'none'}`,
+    'stdout:',
+    visibleOutput(result.stdout),
+    'stderr:',
+    visibleOutput(result.stderr),
+  ].join('\n');
+}
+
+function formatSpawnError(stage: string, error: Error, stdout: string, stderr: string): string {
+  return `${formatCommandTranscript(stage, { code: 1, signal: null, stdout, stderr })}`
+    + `\nspawn error: ${error.message}`;
+}
+
 interface BrowserHandle {
   child: ChildProcess;
-  pid: number;
+  pid: number | undefined;
   port: number;
   stderrTail: string;
   spawnError?: Error;
@@ -251,7 +272,6 @@ export class IntegrationHarness {
       stdio: ['ignore', 'ignore', 'pipe'],
       windowsHide: true,
     });
-    if (!child.pid) throw new Error(`浏览器进程未分配 PID: ${browser.exe}`);
     const handle: BrowserHandle = { child, pid: child.pid, port, stderrTail: '' };
     child.stderr?.on('data', (chunk: Buffer | string) => {
       handle.stderrTail = (handle.stderrTail + chunk.toString()).slice(-16_000);
@@ -266,7 +286,7 @@ export class IntegrationHarness {
     let exitedAt = 0;
     while (Date.now() < deadline) {
       if (handle.spawnError) throw handle.spawnError;
-      if (handle.child.exitCode !== null && exitedAt === 0) exitedAt = Date.now();
+      if (!childAlive(handle.child) && exitedAt === 0) exitedAt = Date.now();
       try {
         const version = await fetch(`http://127.0.0.1:${port}/json/version`, {
           signal: AbortSignal.timeout(800),
@@ -286,12 +306,15 @@ export class IntegrationHarness {
       if (exitedAt && Date.now() - exitedAt > 2_000) break;
       await delay(100);
     }
-    const tail = handle.stderrTail.trim();
-    throw new Error(`浏览器未能在端口 ${port} 就绪并打开 fixture: ${lastError || '超时'}`
-      + (tail ? `\nstderr 尾部:\n${tail}` : ''));
+    throw new Error(`浏览器未能在端口 ${port} 就绪并打开 fixture: ${lastError || '超时'}`);
   }
 
   private async stopBrowserHandle(handle: BrowserHandle): Promise<void> {
+    if (!handle.pid) {
+      const closed = await waitChildClose(handle.child, 2_000);
+      if (!closed) throw new Error('浏览器 spawn 失败后 ChildProcess 句柄仍未关闭');
+      return;
+    }
     if (process.platform === 'win32') {
       terminateTreeSync(handle.child, true);
       let closed = await waitChildClose(handle.child, 2_000);
@@ -420,15 +443,20 @@ export class IntegrationHarness {
       await rm(this.userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       mkdirSync(this.userData, { recursive: true });
       this.writeBrowserConfig(browser, port, args);
-      const handle = this.spawnBrowser(browser, port, args);
-      this.browser = handle;
+      let handle: BrowserHandle | null = null;
       try {
+        handle = this.spawnBrowser(browser, port, args);
+        this.browser = handle;
         await this.waitForOwnedEndpoint(handle, port);
         this.cdpPort = port;
         this.selectedBrowser = browser;
         break;
       } catch (error: unknown) {
-        failures.push(`${browser.exe}: ${errorText(error)}`);
+        const exit = handle
+          ? `pid=${handle.pid ?? 'none'} exitCode=${handle.child.exitCode ?? 'none'} signal=${handle.child.signalCode ?? 'none'}`
+          : 'pid=none exitCode=spawn-threw signal=none';
+        const tail = handle?.stderrTail.trim() || '<empty>';
+        failures.push(`候选 ${browser.kind} ${browser.exe}\n${exit}\n原因: ${errorText(error)}\nstderr 尾部:\n${tail}`);
         try { await this.stopBrowser(); }
         catch (cleanupError: unknown) {
           failures.push(`${browser.exe} 清理失败: ${errorText(cleanupError)}`);
@@ -437,7 +465,8 @@ export class IntegrationHarness {
       }
     }
     if (!this.browser || !this.selectedBrowser) {
-      throw new Error(`发现了浏览器可执行文件，但无一能启动（不能假装 SKIP）:\n${failures.join('\n')}`);
+      throw new Error(`发现了浏览器可执行文件，但无一能启动（不能假装 SKIP）。`
+        + `\n试过的候选:\n${failures.join('\n---\n')}`);
     }
 
     this.logsPort = await findFreePort(55_000 + (process.pid % 5_000), 100, '127.0.0.1');
@@ -502,7 +531,7 @@ export class IntegrationHarness {
         clearTimeout(timer);
         this.activeCommands.delete(child);
         if (spawnError) {
-          rejectCommand(spawnError);
+          rejectCommand(new Error(formatSpawnError(stage, spawnError, stdout, stderr)));
           return;
         }
         if (timedOut) {
@@ -510,10 +539,15 @@ export class IntegrationHarness {
           return;
         }
         if (stderr.includes('已自动启动浏览器')) {
-          rejectCommand(new Error(`场景「${stage}」检测到 dist 自启动了未跟踪浏览器，终止以防漏进程:\n${stderr}`));
+          rejectCommand(new Error(`场景「${stage}」检测到 dist 自启动了未跟踪浏览器，终止以防漏进程:\n`
+            + formatCommandTranscript(stage, { code: code ?? 1, signal, stdout, stderr })));
           return;
         }
-        resolveCommand({ code: code ?? 1, signal, stdout, stderr });
+        const result = { code: code ?? 1, signal, stdout, stderr };
+        if (process.env.CDP_INTEGRATION_DIAGNOSTICS === '1') {
+          console.log(formatCommandTranscript(stage, result));
+        }
+        resolveCommand(result);
       });
     });
   }

@@ -8,6 +8,7 @@ import {
   REPO_ROOT,
   type CommandResult,
 } from './harness.ts';
+import { browserRequired } from '../integration-policy.ts';
 
 const TARGET_MARKER = 'CDP Integration Fixture';
 
@@ -46,6 +47,7 @@ test('本地 fixture 通过 headless 真浏览器走完整 CDP 链路', { timeou
   const discovery = discoverInstalledBrowsers();
   if (!discovery.available.length) {
     const reason = `未找到可用 Edge/Chrome/Chromium；已检查: ${discovery.checked.join(', ')}`;
+    if (browserRequired()) assert.fail(`CI 集成测试禁止跳过：${reason}`);
     console.log(`SKIPPED: ${reason}`);
     t.skip(reason);
     return;
