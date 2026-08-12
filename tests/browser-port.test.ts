@@ -538,7 +538,7 @@ test('reclaimFixedPortListeners: 杀前复确认 PID 仍是当前 listener，已
         portState: async () => ({ state: 'busy' }),
         sleep: async () => undefined,
       }),
-    error => error instanceof FixedPortError && /监听进程 962 已不再归属/.test(error.message),
+    error => error instanceof FixedPortError && /监听进程身份已变化.*PID 962/.test(error.message),
   );
   assert.deepEqual(killed, [961]);
 });
