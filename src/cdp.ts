@@ -18,6 +18,7 @@ import { cmdListen } from './monitor.ts';
 import { ensureBrowser, killBrowser } from './browser.ts';
 import { runScript } from './run-script.ts';
 import { runRecipe } from './recipe-runner.ts';
+import { parseRefArg } from './target-arg.ts';
 import type { Target } from './transport.ts';
 
 declare const __CDP_VERSION__: string;
@@ -248,7 +249,7 @@ targetCmd(
   .option('--focus <ref>', '整页骨架全折,只展开指定既有 ref 的子树(必须与 --budget 配合)')
   .action(async (n, opts) => {
     const sel = readOptFile(opts.selectorFile);
-    const ref = n != null ? Number(n) : undefined;
+    const ref = parseRefArg(n, 'view');
     const focus = opts.focus != null ? Number(opts.focus) : undefined;
     if (ref != null && sel) throw new Error('ref 序号与 --selector-file 只能选其一');
     if (focus != null && (ref != null || sel)) throw new Error('--focus 与位置 ref / --selector-file 不能同时使用');
@@ -506,7 +507,7 @@ targetCmd(
   .action(async (n, opts) => {
     const r = await api.info(
       await needTarget(opts.target),
-      Number(n),
+      parseRefArg(n, 'info')!,
       opts.ancestor != null ? Number(opts.ancestor) : undefined,
     );
     printInfoChain(r);
@@ -518,7 +519,7 @@ targetCmd('article', '以 ref 为根提取格式友好的 Markdown 文章(保序
   .action(async (n, opts) => {
     const r = await api.article(
       await needTarget(opts.target),
-      Number(n),
+      parseRefArg(n, 'article')!,
       opts.ancestor != null ? Number(opts.ancestor) : undefined,
     );
     if (r?.refInvalid) {
@@ -583,6 +584,10 @@ targetCmd('logs', '读 target 控制台日志(常驻 daemon,支持过滤)')
       console.log(`[${ts}][${e.level}] ${argsText}${loc}`);
     }
   });
+
+// 多余的位置参数一律报错(commander 12 默认是静默丢掉)。实测:弱模型爱写
+// `view <url>` / `click <sel> <url>`,被静默吞掉后它以为自己已经在目标页上,后面全盘错。
+for (const c of program.commands) c.allowExcessArguments(false);
 
 if (require.main === module) {
   program.parseAsync(process.argv).catch((error: unknown) => {

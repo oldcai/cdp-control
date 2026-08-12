@@ -220,6 +220,9 @@ await cdp.close(t);
 
 - eval 拿不到 → 已用 returnByValue+awaitPromise;跨域 iframe 用 `contentDocument`。
 - click 报`被 <tag.class> 遮挡`或`元素不可见/无尺寸` → 默认 trusted 坐标点击拒绝错误落点;先关闭 overlay/重新 view,仅 fixed 布局确实滚不进视口时显式 `click ... --dom`(合成事件,`isTrusted:false`)。
+- **位置参数一律是 ref(纯数字)**,`view <url>` / `article <url>` 会直接报错;**URL 只进 `open`/`navigate`/`fetch`**。要看已打开的页面用 `--target <url或title子串>`。
+- **selector 只吃 CSS**:XPath(`div[contains(@class,…)]`、`//div[@id=x]`)与 Playwright 方言(`:has-text()`、`>>`、`text=`)会被拦下并提示——**按文本找元素用 `find --text "<关键词>"`**,拿到 ref 再操作。
+- 多传的位置参数会报 `too many arguments`,不再被静默丢掉(如 `click <selector> <url>` 里那个多余的 url)。
 - SPA 首屏慢,固定 sleep 不够 → 优先 `waitFor`/`waitForFn`。
 - 连接失败 → 先 `list` 自动启动；仍失败检查 `CDP_HOST`，并编辑 `<CDP_HOME>/browser.json` 的权威 `port`。
 - `open` 失败/中断留 tab → `list` 核对后 `close`。
