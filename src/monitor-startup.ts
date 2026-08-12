@@ -1,0 +1,12 @@
+/** monitor daemon 绑定后的启动编排；副作用由调用方注入，便于验证对外可见与 PID 发布顺序。 */
+export interface BoundDaemonStartup {
+  bind(): Promise<void>;
+  publishPid(): void;
+  syncInitialTargets(): Promise<void>;
+}
+
+export async function initializeBoundDaemon(startup: BoundDaemonStartup): Promise<void> {
+  await startup.bind();
+  startup.publishPid();
+  await startup.syncInitialTargets();
+}

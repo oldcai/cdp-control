@@ -16,6 +16,7 @@ import {
   type DaemonIdentity,
 } from './monitor-health.ts';
 import { legacyDaemonPidFilePath, retireDaemonProcess } from './monitor-process';
+import { initializeBoundDaemon } from './monitor-startup.ts';
 
 export const LOGS_PORT = cdpLogsPort();
 
@@ -140,16 +141,21 @@ export async function cmdListen(): Promise<never> {
     res.end('{}');
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(LOGS_PORT, '127.0.0.1', resolve);
+  await initializeBoundDaemon({
+    bind: () =>
+      new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(LOGS_PORT, '127.0.0.1', resolve);
+      }),
+    publishPid: () => {
+      mkdirSync(cdpHome(), { recursive: true });
+      writeFileSync(pidFilePath(), String(process.pid));
+    },
+    syncInitialTargets: sync,
   });
-  await sync();
   setInterval(() => {
     sync().catch(() => {});
   }, 500);
-  mkdirSync(cdpHome(), { recursive: true });
-  writeFileSync(pidFilePath(), String(process.pid));
   process.on('SIGINT', () => process.exit(0));
   process.on('SIGTERM', () => process.exit(0));
   console.error(`注入守护 daemon 就绪 :${LOGS_PORT},tabs=${attached.size}`);
