@@ -587,6 +587,28 @@ test('reclaimFixedPortListeners: 异步 guard 期间 listener PID 被替换时 f
   assert.deepEqual(killed, []);
 });
 
+test('reclaimFixedPortListeners: listener 快照期间 DNS 集合变化时在 kill 前 fail closed', async () => {
+  const dnsChanged = new Error('DNS changed during listener snapshot fixture');
+  const killed: number[] = [];
+  let addressChecks = 0;
+
+  await assert.rejects(
+    () =>
+      reclaimFixedPortListeners(24134, [971], {
+        assertAddressSet: async () => {
+          addressChecks += 1;
+          if (addressChecks === 2) throw dnsChanged;
+        },
+        listenerPids: async () => [971],
+        killPid: pid => killed.push(pid),
+        portState: async () => ({ state: 'free' }),
+        sleep: async () => undefined,
+      }),
+    error => error === dnsChanged,
+  );
+  assert.deepEqual(killed, []);
+});
+
 function dependencies(
   options: {
     probes?: ProbeResult[];
@@ -807,7 +829,9 @@ test('prepareFixedPort: 忙且非健康时 kill 全部去重 listener，确认�
     'probe:24103',
     'listeners:24103',
     'listeners:24103',
+    'listeners:24103',
     'kill:502',
+    'listeners:24103',
     'listeners:24103',
     'kill:501',
     'state:24103',
@@ -963,7 +987,7 @@ test('prepareFixedPort: 任一 kill 抛错则保留真因并停止', async () =>
     killError: new Error('EPERM fixture'),
   });
   await assert.rejects(() => prepareFixedPort(24107, d), /EPERM fixture/);
-  assert.deepEqual(d.calls.slice(0, 13), [
+  assert.deepEqual(d.calls.slice(0, 15), [
     'probe:24107',
     'state:24107',
     'listeners:24107',
@@ -971,9 +995,11 @@ test('prepareFixedPort: 任一 kill 抛错则保留真因并停止', async () =>
     'state:24107',
     'listeners:24107',
     'probe:24107',
+    'listeners:24107',
     'listeners:24107',
     'listeners:24107',
     'kill:701',
+    'listeners:24107',
     'listeners:24107',
     'kill:702',
     'state:24107',
@@ -1037,6 +1063,7 @@ test('prepareFixedPort: kill 后端口超时未释放则失败，绝不谎报可
     'state:24108',
     'listeners:24108',
     'probe:24108',
+    'listeners:24108',
     'listeners:24108',
     'listeners:24108',
     'kill:801',

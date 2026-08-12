@@ -359,11 +359,18 @@ export async function reclaimFixedPortListeners(
   const guard = async (pid: number): Promise<void> => {
     assertAuthority(port, deps);
     await assertAddressSet(deps);
-    // listener 枚举必须是 kill 前最后一个 awaited 步骤；之后仅做同步权威校验并立即 kill，
-    // 避免旧 listener 退出、PID 被无关进程复用时误杀替代进程或进程树。
+    const beforeAddressValidation = await listenerSnapshot(port, deps);
+    assertAuthority(port, deps);
+    // 首次快照后再复核 DNS 集合，并以第二次 listener 枚举作为 kill 前最后一个 awaited 步骤。
+    // 这样既不会消费陈旧地址授权，也避免 async guard 后旧 PID 被无关进程复用。
+    await assertAddressSet(deps);
     const currentPids = await listenerSnapshot(port, deps);
     assertAuthority(port, deps);
-    if (!currentPids.includes(pid) || currentPids.some(currentPid => !expectedPidSet.has(currentPid))) {
+    if (
+      !samePids(beforeAddressValidation, currentPids) ||
+      !currentPids.includes(pid) ||
+      currentPids.some(currentPid => !expectedPidSet.has(currentPid))
+    ) {
       throw new FixedPortError(
         `配置端口 ${port} 的监听进程身份已变化(${expectedPids.join(', ')} -> ${currentPids.join(', ')})，拒绝结束 PID ${pid}`,
       );
