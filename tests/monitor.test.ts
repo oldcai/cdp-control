@@ -2,7 +2,14 @@
 import assert from 'node:assert/strict';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { daemonHealthy, daemonIdentity, daemonPidFilePath, type DaemonIdentity } from '../src/monitor-health.ts';
+import {
+  daemonHealthy,
+  daemonIdentity,
+  daemonPidFilePath,
+  ensureDaemonReady,
+  probeDaemonHealth,
+  type DaemonIdentity,
+} from '../src/monitor-health.ts';
 
 function healthFetch(identity: DaemonIdentity): typeof fetch {
   return async () =>
@@ -40,8 +47,95 @@ test('daemonHealthy: 仅认当前 CDP_HOME 与 CDP endpoint 都一致的 daemon'
   assert.equal(await daemonHealthy(19333, expected, healthFetch(otherPort)), false);
 });
 
-test('daemonHealthy: 旧版或无关 /health 即使 ok 也 fail closed', async () => {
+test('probeDaemonHealth: 区分 current、legacy、foreign 与 unreachable', async () => {
   const expected = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9222);
-  const oldHealth: typeof fetch = async () => new Response(JSON.stringify({ ok: true, targets: 1 }));
-  assert.equal(await daemonHealthy(19333, expected, oldHealth), false);
+  const foreign = daemonIdentity({ CDP_HOME: join('tmp', 'other-home') }, join('fake', 'home'), '127.0.0.1', 9222);
+  const legacyFetch: typeof fetch = async () => new Response(JSON.stringify({ ok: true, targets: 1 }));
+  const ambiguousFetch: typeof fetch = async () => new Response(JSON.stringify({ ok: true }));
+  const unreachableFetch: typeof fetch = async () => {
+    throw new TypeError('fetch failed');
+  };
+
+  assert.equal(await probeDaemonHealth(19333, expected, healthFetch(expected)), 'current');
+  assert.equal(await probeDaemonHealth(19333, expected, legacyFetch), 'legacy');
+  assert.equal(await probeDaemonHealth(19333, expected, ambiguousFetch), 'foreign');
+  assert.equal(await probeDaemonHealth(19333, expected, healthFetch(foreign)), 'foreign');
+  assert.equal(await probeDaemonHealth(19333, expected, unreachableFetch), 'unreachable');
+  assert.equal(await daemonHealthy(19333, expected, legacyFetch), false);
+});
+
+test('ensureDaemonReady: legacy 先 shutdown 并等 health 消失,再 spawn 并等待 current', async () => {
+  const expected = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9222);
+  const calls: string[] = [];
+  let phase: 'legacy' | 'stopping' | 'stopped' | 'starting' | 'current' = 'legacy';
+  const fakeFetch: typeof fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const method = init?.method ?? 'GET';
+    calls.push(`${method} ${new URL(url).pathname} (${phase})`);
+    if (new URL(url).pathname === '/shutdown') {
+      assert.equal(phase, 'legacy');
+      phase = 'stopping';
+      return new Response('{}');
+    }
+    if (phase === 'stopped') throw new TypeError('fetch failed');
+    if (phase === 'current') {
+      return new Response(JSON.stringify({ ok: true, identity: expected, targets: 0 }));
+    }
+    return new Response(JSON.stringify({ ok: true, targets: 1 }));
+  };
+  const fakeSleep = async (milliseconds: number): Promise<void> => {
+    calls.push(`sleep ${milliseconds} (${phase})`);
+    if (phase === 'stopping') phase = 'stopped';
+    if (phase === 'starting') phase = 'current';
+  };
+  const fakeSpawn = async (): Promise<void> => {
+    calls.push(`spawn (${phase})`);
+    assert.equal(phase, 'stopped');
+    phase = 'starting';
+  };
+
+  await ensureDaemonReady(19333, expected, {
+    fetchImpl: fakeFetch,
+    pollAttempts: 2,
+    pollIntervalMs: 25,
+    sleepImpl: fakeSleep,
+    spawnImpl: fakeSpawn,
+  });
+
+  assert.deepEqual(calls, [
+    'GET /health (legacy)',
+    'GET /health (legacy)',
+    'POST /shutdown (legacy)',
+    'sleep 25 (stopping)',
+    'GET /health (stopped)',
+    'spawn (stopped)',
+    'sleep 25 (starting)',
+    'GET /health (current)',
+  ]);
+});
+
+test('ensureDaemonReady: foreign identity 立即拒绝,绝不 shutdown 或 spawn', async () => {
+  const expected = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9222);
+  const foreign = daemonIdentity({ CDP_HOME: join('tmp', 'other-home') }, join('fake', 'home'), '127.0.0.1', 9222);
+  const calls: string[] = [];
+  const fakeFetch: typeof fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    calls.push(`${init?.method ?? 'GET'} ${new URL(url).pathname}`);
+    return new Response(JSON.stringify({ ok: true, identity: foreign, targets: 0 }));
+  };
+
+  await assert.rejects(
+    ensureDaemonReady(19333, expected, {
+      fetchImpl: fakeFetch,
+      pollAttempts: 1,
+      sleepImpl: async () => {
+        calls.push('sleep');
+      },
+      spawnImpl: async () => {
+        calls.push('spawn');
+      },
+    }),
+    /identity|daemon|9333/i,
+  );
+  assert.deepEqual(calls, ['GET /health']);
 });

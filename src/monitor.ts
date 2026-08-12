@@ -12,6 +12,7 @@ import {
   daemonHealthy as probeDaemonHealth,
   daemonIdentity,
   daemonPidFilePath,
+  ensureDaemonReady,
   type DaemonIdentity,
 } from './monitor-health.ts';
 
@@ -49,14 +50,12 @@ export async function maybeSpawnDaemon(): Promise<void> {
 }
 
 export async function ensureDaemon(port = LOGS_PORT): Promise<number> {
-  if (await daemonHealthy(port)) return port;
-  await spawnDaemon();
-  const t0 = Date.now();
-  while (Date.now() - t0 < 8000) {
-    await sleep(300);
-    if (await daemonHealthy(port)) return port;
-  }
-  throw new Error('监听 daemon 启动失败');
+  await ensureDaemonReady(port, currentDaemonIdentity(), {
+    fetchImpl: fetch,
+    sleepImpl: sleep,
+    spawnImpl: spawnDaemon,
+  });
+  return port;
 }
 
 /**

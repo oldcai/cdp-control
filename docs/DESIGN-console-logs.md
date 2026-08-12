@@ -50,7 +50,11 @@ logs 命令: 幂等注入(MONITOR_JS)+ 读取 window.__cdpLogs 并结构化序�
 ### daemon(`cmdListen`,注入守护)
 - `inject(target)`:attach WS → `Page.enable` → `Page.addScriptToEvaluateOnNewDocument(MONITOR_JS)`(注册给未来所有 document)→ `Runtime.evaluate(MONITOR_JS)`(立即注入当前已加载页,幂等)。
 - `sync()`:每 500ms 轮询 `/json/list`,对未 attach 的 tab 注入(覆盖手动新开)。WS 断开 → 移除,下轮重连重注册。
-- HTTP:仅 `/health`(存活探测)+ `/shutdown`。PID 存 `os.tmpdir()/cdp-listen.pid`。
+- HTTP:仅 `/health`(存活探测)+ `/shutdown`。`/health` 返回 daemon identity
+  (`CDP_HOME` + CDP host/port),PID 存当前 `CDP_HOME/cdp-listen.pid`,不与其它 home 共享状态。
+- 兼容升级:发现旧版 `{ok:true,targets:number}`(无 identity) 时,二次确认后只对它
+  `POST /shutdown`,等 health 不可达再启动新 daemon；带 identity 但不匹配的 foreign daemon 一律拒绝,
+  绝不会被 shutdown。
 
 ### `logs` 命令 / `cdp.logs` API
 - `maybeSpawnDaemon()` 确保 daemon 在跑(持续守护注入)。
