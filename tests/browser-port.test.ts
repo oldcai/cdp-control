@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   prepareFixedPort,
+  combineAddressStates,
   parseNetstatListeners,
   parseLsofListeners,
   type FixedPortDependencies,
@@ -36,6 +37,13 @@ test('lsofListenerArgs: POSIX 枚举只请求精确 TCP LISTEN，不会收客户
 test('socketHost: bracketed IPv6 仅 URL 保留括号，socket bind/connect 使用裸地址', () => {
   assert.equal(socketHost('[::1]'), '::1');
   assert.equal(socketHost('127.0.0.1'), '127.0.0.1');
+});
+
+test('combineAddressStates: localhost 跳过关闭的 IPv6 地址族，保留 IPv4 空闲结论', () => {
+  assert.deepEqual(combineAddressStates([
+    { address: '127.0.0.1', state: 'free' },
+    { address: '::1', state: 'unknown', code: 'EAFNOSUPPORT', reason: 'connect ::1 EAFNOSUPPORT' },
+  ]), { state: 'free' });
 });
 
 test('waitForCdpReady: 子进程早退后仍有界复探，并复用并发启动成功的 CDP', async () => {

@@ -7,7 +7,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { spawn, spawnSync, execFile } from 'node:child_process';
-import { createServer, connect } from 'node:net';
+import { createServer, connect, isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
 import { promisify } from 'node:util';
 import { getJson, setPort, HOST, PORT, sleep } from './transport';
@@ -16,16 +16,17 @@ import { discoverCandidates, type BrowserKind } from './browser-discover';
 import { browserConfigPath, parseBrowserConfig, defaultArgs, effectiveBrowserPort, DEFAULT_PORT, DEFAULT_USER_DATA, type BrowserConfig } from './browser-config';
 import {
   prepareFixedPort,
+  combineAddressStates,
   FixedPortError,
   hasCdpWebSocket,
   killListenerPids,
   lsofListenerArgs,
-  parseNetstatListeners,
   parseNetstatListenersForHosts,
   parseLsofListeners,
   parseLsofListenersForHosts,
   planListenerCleanup,
   socketHost,
+  type AddressPortState,
   waitForCdpReady,
   type PortState,
 } from './browser-port';
@@ -143,38 +144,46 @@ function writeConfigAtomic(p: string, cfg: BrowserConfig): void {
 
 /** connect 先挡 Windows SO_REUSEADDR 的 bind 假空闲，再以严格 bind 确认真的可用。 */
 async function portState(port: number): Promise<PortState> {
-  const connected = await connectState(port);
+  let hosts: string[];
+  try { hosts = await resolveSocketHosts(); }
+  catch (cause) {
+    return { state: 'unknown', reason: `解析 ${HOST} 失败: ${cause instanceof Error ? cause.message : String(cause)}` };
+  }
+  const connected = combineAddressStates(await Promise.all(hosts.map(host => connectAddressState(port, host))));
   if (connected.state !== 'free') return connected;
-  return bindState(port);
+  return combineAddressStates(await Promise.all(hosts.map(host => bindAddressState(port, host))));
 }
 
-function connectState(port: number): Promise<PortState> {
+function connectAddressState(port: number, host: string): Promise<AddressPortState> {
   return new Promise(resolve => {
-    const socket = connect({ port, host: socketHost(HOST) });
+    const socket = connect({ port, host });
     let settled = false;
-    const finish = (state: PortState) => {
+    const finish = (state: AddressPortState) => {
       if (settled) return;
       settled = true;
       socket.destroy();
       resolve(state);
     };
-    socket.setTimeout(1000, () => finish({ state: 'unknown', reason: `connect ${HOST}:${port} ETIMEDOUT` }));
-    socket.once('connect', () => finish({ state: 'busy' }));
-    socket.once('error', (error: NodeJS.ErrnoException) => finish(error.code === 'ECONNREFUSED'
-      ? { state: 'free' }
-      : { state: 'unknown', reason: `connect ${HOST}:${port} ${error.code ?? error.message}` }));
+    socket.setTimeout(1000, () => finish({ address: host, state: 'unknown', code: 'ETIMEDOUT', reason: `connect ${host}:${port} ETIMEDOUT` }));
+    socket.once('connect', () => finish({ address: host, state: 'busy' }));
+    socket.once('error', (error: NodeJS.ErrnoException) => {
+      const code = error.code ?? 'UNKNOWN';
+      finish(code === 'ECONNREFUSED'
+        ? { address: host, state: 'free' }
+        : { address: host, state: 'unknown', code, reason: `connect ${host}:${port} ${code}` });
+    });
   });
 }
 
-function bindState(port: number): Promise<PortState> {
+function bindAddressState(port: number, host: string): Promise<AddressPortState> {
   return new Promise(resolve => {
     const server = createServer();
     let settled = false;
     const timer = setTimeout(() => {
       try { server.close(); } catch {}
-      finish({ state: 'unknown', reason: `bind ${HOST}:${port} ETIMEDOUT` });
+      finish({ address: host, state: 'unknown', code: 'ETIMEDOUT', reason: `bind ${host}:${port} ETIMEDOUT` });
     }, 1000);
-    const finish = (state: PortState) => {
+    const finish = (state: AddressPortState) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -182,26 +191,39 @@ function bindState(port: number): Promise<PortState> {
     };
     // 极窄探测窗口内若有客户端连入，立即断开，避免 `server.close(cb)` 等连接结束而永久挂住。
     server.on('connection', socket => socket.destroy());
-    server.once('error', (error: NodeJS.ErrnoException) => finish(error.code === 'EADDRINUSE'
-      ? { state: 'busy' }
-      : { state: 'unknown', reason: `bind ${HOST}:${port} ${error.code ?? error.message}` }));
+    server.once('error', (error: NodeJS.ErrnoException) => {
+      const code = error.code ?? 'UNKNOWN';
+      finish(code === 'EADDRINUSE'
+        ? { address: host, state: 'busy' }
+        : { address: host, state: 'unknown', code, reason: `bind ${host}:${port} ${code}` });
+    });
     server.once('listening', () => server.close(error => finish(error
-      ? { state: 'unknown', reason: `close bind probe ${HOST}:${port} ${error.message}` }
-      : { state: 'free' })));
-    server.listen({ port, host: socketHost(HOST), exclusive: true });
+      ? { address: host, state: 'unknown', code: 'CLOSE_FAILED', reason: `close bind probe ${host}:${port} ${error.message}` }
+      : { address: host, state: 'free' })));
+    server.listen({ port, host, exclusive: true });
   });
+}
+
+async function resolveSocketHosts(): Promise<string[]> {
+  const normalized = socketHost(HOST).toLowerCase();
+  if (normalized === 'localhost') return ['127.0.0.1', '::1'];
+  if (isIP(normalized)) return [normalized];
+  const addresses = await lookup(normalized, { all: true });
+  const hosts = [...new Set(addresses.map(entry => socketHost(entry.address).toLowerCase()))];
+  if (!hosts.length) throw new Error('DNS 未返回地址');
+  return hosts;
 }
 
 /** 只枚举真正服务 `HOST:port` 的 TCP LISTEN listener；命令失败保留真因并由门禁拒绝继续。 */
 async function listenerPids(port: number): Promise<number[]> {
   try {
-    const resolvedHosts = await listenerHosts();
+    const resolvedHosts = await resolveSocketHosts();
     if (process.platform === 'win32') {
       const { stdout } = await execFileAsync('netstat', ['-ano'], { encoding: 'utf8' });
-      return resolvedHosts ? parseNetstatListenersForHosts(stdout, port, resolvedHosts) : parseNetstatListeners(stdout, port, HOST);
+      return parseNetstatListenersForHosts(stdout, port, resolvedHosts);
     }
     const { stdout } = await execFileAsync('lsof', lsofListenerArgs(port), { encoding: 'utf8' });
-    return resolvedHosts ? parseLsofListenersForHosts(stdout, port, resolvedHosts) : parseLsofListeners(stdout, port, HOST);
+    return parseLsofListenersForHosts(stdout, port, resolvedHosts);
   } catch (error) {
     const stdout = typeof error === 'object' && error !== null && 'stdout' in error && typeof error.stdout === 'string'
       ? error.stdout : '';
@@ -214,16 +236,6 @@ async function listenerPids(port: number): Promise<number[]> {
     const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : 'unknown';
     throw new Error(`枚举配置端口 ${HOST}:${port} 的监听进程失败(${code})${stderr ? `: ${stderr}` : ''}`, { cause: error });
   }
-}
-
-/** 数值 host/localhost 由纯解析器直接处理；普通主机名先解析为 netstat/lsof 会报告的数值地址。 */
-async function listenerHosts(): Promise<string[] | null> {
-  const normalized = HOST.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
-  if (normalized === 'localhost' || normalized.includes(':') || /^\d+(?:\.\d+){3}$/.test(normalized)) return null;
-  const addresses = await lookup(HOST, { all: true });
-  const hosts = [...new Set(addresses.map(entry => entry.address))];
-  if (!hosts.length) throw new Error(`DNS 未返回地址: ${HOST}`);
-  return hosts;
 }
 
 function killPid(pid: number): void {

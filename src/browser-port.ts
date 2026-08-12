@@ -5,6 +5,10 @@
 
 export interface ProbeResult { ready: boolean; browser?: string; }
 export type PortState = { state: 'free' } | { state: 'busy' } | { state: 'unknown'; reason: string };
+export type AddressPortState =
+  | { address: string; state: 'free' }
+  | { address: string; state: 'busy' }
+  | { address: string; state: 'unknown'; code: string; reason: string };
 export type FixedPortAction = { action: 'reuse'; browser?: string } | { action: 'launch'; port: number };
 
 /** 端口门禁失败；调用方据此区分“不得继续”的安全错误与某个浏览器候选自身启动失败。 */
@@ -28,6 +32,24 @@ export function lsofListenerArgs(port: number): string[] {
 /** HTTP URL 中 IPv6 需要括号，Node socket API 则必须使用裸地址。 */
 export function socketHost(host: string): string {
   return host.trim().replace(/^\[([^\]]+)\]$/, '$1');
+}
+
+const FAMILY_OFF = new Set(['EAFNOSUPPORT', 'EPFNOSUPPORT', 'ENETUNREACH', 'EADDRNOTAVAIL', 'EHOSTUNREACH', 'EINVAL']);
+
+/** 多地址 host 的探测结论：任一 busy 优先；仅跳过本机不可用的回环地址族。 */
+export function combineAddressStates(states: AddressPortState[]): PortState {
+  if (states.some(state => state.state === 'busy')) return { state: 'busy' };
+  const unknown = states.filter((state): state is Extract<AddressPortState, { state: 'unknown' }> =>
+    state.state === 'unknown' && !loopbackFamilyUnavailable(state.address, state.code));
+  if (unknown.length) return { state: 'unknown', reason: unknown.map(state => state.reason).join('; ') };
+  if (states.some(state => state.state === 'free')) return { state: 'free' };
+  return { state: 'unknown', reason: '没有可用的本机地址族' };
+}
+
+function loopbackFamilyUnavailable(address: string, code: string): boolean {
+  const normalized = canonicalAddress(address);
+  const loopback = normalized === '::1' || normalized === '::ffff:127.0.0.1' || /^127\./.test(normalized);
+  return loopback && FAMILY_OFF.has(code);
 }
 
 export interface CdpReadyWaitDependencies {
