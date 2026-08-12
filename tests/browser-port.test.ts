@@ -171,6 +171,28 @@ test('probeHostCdp: DNS 单地址无法验证主探活时 fail closed，不得 p
   );
 });
 
+test('probeHostCdp: primary 未就绪时 pinned resolver 的 FixedPortError 仍立即传播', async () => {
+  const dnsChanged = new FixedPortError('pinned DNS set changed fixture');
+  let addressProbeCalled = false;
+
+  await assert.rejects(
+    () =>
+      probeHostCdp({
+        originalHost: 'cdp.example.test',
+        primary: async () => ({ ready: false }),
+        resolveAddresses: async () => {
+          throw dnsChanged;
+        },
+        address: async () => {
+          addressProbeCalled = true;
+          return { ready: false };
+        },
+      }),
+    error => error === dnsChanged,
+  );
+  assert.equal(addressProbeCalled, false);
+});
+
 test('probeHostCdp: 主连接健康但多地址中仅后一个是 CDP 时必须 pin 该数值地址', async () => {
   const calls: string[] = [];
   assert.deepEqual(

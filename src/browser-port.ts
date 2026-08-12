@@ -104,6 +104,7 @@ export async function probeHostCdp(deps: HostCdpProbeDependencies): Promise<Prob
   try {
     addresses = await deps.resolveAddresses();
   } catch (cause) {
+    if (cause instanceof FixedPortError) throw cause;
     if (primary.ready) {
       throw new FixedPortError('无法解析 CDP_HOST 的全部地址，拒绝在未归属的健康端点上继续', { cause });
     }
