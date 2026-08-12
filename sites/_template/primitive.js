@@ -16,13 +16,16 @@
 const target = await cdp.resolve(''); // ← 改成 url/title 子串
 await cdp.waitFor(target, '.CommentList', { timeout: 10000 });
 
-const data = await cdp.eval(target, `(() => {
+const data = await cdp.eval(
+  target,
+  `(() => {
   const items = [...document.querySelectorAll('.CommentItem')];
   return items.map(it => ({
     author: it.querySelector('.author a')?.innerText.trim(),
     body: it.querySelector('.content')?.innerText.trim(),
     likes: it.querySelector('.like')?.innerText.trim(),
   }));
-})()`);
+})()`,
+);
 
 console.log(JSON.stringify(data, null, 2));

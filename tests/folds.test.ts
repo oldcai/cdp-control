@@ -8,27 +8,33 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  parseRules, domainMatch, pathMatch, hostOf, pathOf, matchFolds, loadFolds,
-} from '../src/folds.ts';
+import { parseRules, domainMatch, pathMatch, hostOf, pathOf, matchFolds, loadFolds } from '../src/folds.ts';
 
 // 每个需要落盘的测试用独立临时 folds 文件,避免互相污染 / 污染真实 dist/fold-selectors.csv。
 function withTmpDir<T>(fn: (dir: string) => T): T {
   const dir = mkdtempSync(join(tmpdir(), 'cdp-folds-'));
   const prev = process.env.CDP_FOLD_FILE;
   process.env.CDP_FOLD_FILE = join(dir, 'folds.csv');
-  try { return fn(dir); }
-  finally {
+  try {
+    return fn(dir);
+  } finally {
     process.env.CDP_FOLD_FILE = prev;
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
 test('parseRules: 新格式 5 列(id/domain/path/selector/note)', () => {
-  const txt = '# 注释\n\n1\twww.bilibili.com\t/video/*\t#biliMainHeader\t顶栏\n2\t*.zhihu.com\t*\t.AppHeader\t知乎顶栏\n';
+  const txt =
+    '# 注释\n\n1\twww.bilibili.com\t/video/*\t#biliMainHeader\t顶栏\n2\t*.zhihu.com\t*\t.AppHeader\t知乎顶栏\n';
   const r = parseRules(txt);
   assert.equal(r.length, 2);
-  assert.deepEqual(r[0], { id: 1, domain: 'www.bilibili.com', path: '/video/*', selector: '#biliMainHeader', note: '顶栏' });
+  assert.deepEqual(r[0], {
+    id: 1,
+    domain: 'www.bilibili.com',
+    path: '/video/*',
+    selector: '#biliMainHeader',
+    note: '顶栏',
+  });
   assert.deepEqual(r[1], { id: 2, domain: '*.zhihu.com', path: '*', selector: '.AppHeader', note: '知乎顶栏' });
 });
 
@@ -52,7 +58,13 @@ test('parseRules: 旧格式(首列非数字)整行跳过,不迁移', () => {
 });
 
 test('parseRules: 无备注(末列空)行不报错;仅域名无 selector 不影响解析', () => {
-  assert.deepEqual(parseRules('1\ta.com\t*\t.x\t\n')[0], { id: 1, domain: 'a.com', path: '*', selector: '.x', note: '' });
+  assert.deepEqual(parseRules('1\ta.com\t*\t.x\t\n')[0], {
+    id: 1,
+    domain: 'a.com',
+    path: '*',
+    selector: '.x',
+    note: '',
+  });
 });
 
 test('domainMatch: 精确域名', () => {
@@ -125,7 +137,8 @@ test('matchFolds: 空 path 规则只看域名', () => {
 
 test('matchFolds: path glob 规则同域名跨页区分', () => {
   // 同域名两条不同 path 规则:视频页 vs 账户页,验证跨页不互相命中
-  const txt = '1\twww.bilibili.com\t/video/*\t#videoHdr\t视频页顶栏\n2\twww.bilibili.com\t/account/*\t#accountHdr\t账户页顶栏\n';
+  const txt =
+    '1\twww.bilibili.com\t/video/*\t#videoHdr\t视频页顶栏\n2\twww.bilibili.com\t/account/*\t#accountHdr\t账户页顶栏\n';
   withTmpDir(dir => {
     writeFileSync(join(dir, 'folds.csv'), txt, 'utf8');
     // 视频页只命中 /video/* 规则(/account/* 不命中)
@@ -167,4 +180,3 @@ test('loadFolds: 文件不存在返回空数组', () => {
     assert.deepEqual(loadFolds(), []);
   });
 });
-

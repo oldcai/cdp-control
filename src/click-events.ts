@@ -1,6 +1,9 @@
 /** click-events.ts — 生成一次 trusted 左键单击的 CDP 鼠标事件序列。 */
 
-export interface MousePoint { x: number; y: number }
+export interface MousePoint {
+  x: number;
+  y: number;
+}
 
 export type MouseClickEvent =
   | { type: 'mouseMoved'; x: number; y: number }

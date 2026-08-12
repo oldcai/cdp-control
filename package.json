@@ -6,7 +6,11 @@
   "bin": {
     "cdp-control": "./dist/cdp.js"
   },
-  "files": ["dist", "rules", "skills"],
+  "files": [
+    "dist",
+    "rules",
+    "skills"
+  ],
   "engines": {
     "node": ">=22.6.0"
   },

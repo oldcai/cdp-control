@@ -57,8 +57,9 @@ export function formatCommandTranscript(stage: string, result: CommandResult): s
 }
 
 function formatSpawnError(stage: string, error: Error, stdout: string, stderr: string): string {
-  return `${formatCommandTranscript(stage, { code: 1, signal: null, stdout, stderr })}`
-    + `\nspawn error: ${error.message}`;
+  return (
+    `${formatCommandTranscript(stage, { code: 1, signal: null, stdout, stderr })}` + `\nspawn error: ${error.message}`
+  );
 }
 
 interface BrowserHandle {
@@ -80,9 +81,7 @@ function executable(path: string): boolean {
 
 function resolveFromPath(name: string): string | null {
   const pathValue = process.env.PATH || '';
-  const extensions = process.platform === 'win32'
-    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';')
-    : [''];
+  const extensions = process.platform === 'win32' ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';') : [''];
   for (const dir of pathValue.split(delimiter).filter(Boolean)) {
     for (const extension of extensions) {
       const candidate = join(dir, name + extension);
@@ -164,7 +163,9 @@ function terminateTreeSync(child: ChildProcess, force = true): void {
       process.kill(-pid, force ? 'SIGKILL' : 'SIGTERM');
     }
   } catch {
-    try { child.kill(force ? 'SIGKILL' : 'SIGTERM'); } catch {}
+    try {
+      child.kill(force ? 'SIGKILL' : 'SIGTERM');
+    } catch {}
   }
 }
 
@@ -201,8 +202,12 @@ export class IntegrationHarness {
   private signalInProgress = false;
 
   private readonly exitHandler = (): void => this.cleanupSync();
-  private readonly sigintHandler = (): void => { void this.handleSignal('SIGINT'); };
-  private readonly sigtermHandler = (): void => { void this.handleSignal('SIGTERM'); };
+  private readonly sigintHandler = (): void => {
+    void this.handleSignal('SIGINT');
+  };
+  private readonly sigtermHandler = (): void => {
+    void this.handleSignal('SIGTERM');
+  };
 
   constructor(browsers: ResolvedBrowser[]) {
     this.browsers = browsers;
@@ -228,8 +233,11 @@ export class IntegrationHarness {
     if (this.signalInProgress) return;
     this.signalInProgress = true;
     console.error(`\n收到 ${signal}，正在清理本测试拥有的子进程与临时目录…`);
-    try { await this.cleanup(); }
-    finally { process.exit(signal === 'SIGINT' ? 130 : 143); }
+    try {
+      await this.cleanup();
+    } finally {
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    }
   }
 
   private browserArgs(): string[] {
@@ -262,21 +270,22 @@ export class IntegrationHarness {
   }
 
   private spawnBrowser(browser: ResolvedBrowser, port: number, args: string[]): BrowserHandle {
-    const child = spawn(browser.exe, [
-      ...args,
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${this.userData}`,
-      this.fixtureUrl,
-    ], {
-      detached: process.platform !== 'win32',
-      stdio: ['ignore', 'ignore', 'pipe'],
-      windowsHide: true,
-    });
+    const child = spawn(
+      browser.exe,
+      [...args, `--remote-debugging-port=${port}`, `--user-data-dir=${this.userData}`, this.fixtureUrl],
+      {
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'ignore', 'pipe'],
+        windowsHide: true,
+      },
+    );
     const handle: BrowserHandle = { child, pid: child.pid, port, stderrTail: '' };
     child.stderr?.on('data', (chunk: Buffer | string) => {
       handle.stderrTail = (handle.stderrTail + chunk.toString()).slice(-16_000);
     });
-    child.once('error', error => { handle.spawnError = error; });
+    child.once('error', error => {
+      handle.spawnError = error;
+    });
     return handle;
   }
 
@@ -407,7 +416,8 @@ export class IntegrationHarness {
       'CDP_RULES_DEFAULT_DIR',
       'CDP_FOLD_FILE',
       'CDP_IGNORE_LINKS_FILE',
-    ]) delete environment[key];
+    ])
+      delete environment[key];
     environment.CDP_HOME = this.home;
     environment.CDP_HOST = '127.0.0.1';
     environment.CDP_PORT = String(this.cdpPort);
@@ -457,16 +467,18 @@ export class IntegrationHarness {
           : 'pid=none exitCode=spawn-threw signal=none';
         const tail = handle?.stderrTail.trim() || '<empty>';
         failures.push(`候选 ${browser.kind} ${browser.exe}\n${exit}\n原因: ${errorText(error)}\nstderr 尾部:\n${tail}`);
-        try { await this.stopBrowser(); }
-        catch (cleanupError: unknown) {
+        try {
+          await this.stopBrowser();
+        } catch (cleanupError: unknown) {
           failures.push(`${browser.exe} 清理失败: ${errorText(cleanupError)}`);
           break;
         }
       }
     }
     if (!this.browser || !this.selectedBrowser) {
-      throw new Error(`发现了浏览器可执行文件，但无一能启动（不能假装 SKIP）。`
-        + `\n试过的候选:\n${failures.join('\n---\n')}`);
+      throw new Error(
+        `发现了浏览器可执行文件，但无一能启动（不能假装 SKIP）。` + `\n试过的候选:\n${failures.join('\n---\n')}`,
+      );
     }
 
     this.logsPort = await findFreePort(55_000 + (process.pid % 5_000), 100, '127.0.0.1');
@@ -494,11 +506,11 @@ export class IntegrationHarness {
     const deadline = Date.now() + 15_000;
     let last = '';
     while (Date.now() < deadline) {
-      const result = await this.runCli([
-        'eval',
-        '--target', targetMatch,
-        `document.readyState === 'complete' && window.fixtureReady === true`,
-      ], '等待 fixture DOM 就绪', 5_000);
+      const result = await this.runCli(
+        ['eval', '--target', targetMatch, `document.readyState === 'complete' && window.fixtureReady === true`],
+        '等待 fixture DOM 就绪',
+        5_000,
+      );
       last = `${result.stderr}\n${result.stdout}`.trim();
       if (result.code === 0 && result.stdout.trim() === 'true') return;
       await delay(100);
@@ -520,9 +532,15 @@ export class IntegrationHarness {
       let stderr = '';
       let spawnError: Error | null = null;
       let timedOut = false;
-      child.stdout?.on('data', (chunk: Buffer | string) => { stdout += chunk.toString(); });
-      child.stderr?.on('data', (chunk: Buffer | string) => { stderr += chunk.toString(); });
-      child.once('error', error => { spawnError = error; });
+      child.stdout?.on('data', (chunk: Buffer | string) => {
+        stdout += chunk.toString();
+      });
+      child.stderr?.on('data', (chunk: Buffer | string) => {
+        stderr += chunk.toString();
+      });
+      child.once('error', error => {
+        spawnError = error;
+      });
       const timer = setTimeout(() => {
         timedOut = true;
         terminateTreeSync(child, true);
@@ -539,8 +557,12 @@ export class IntegrationHarness {
           return;
         }
         if (stderr.includes('已自动启动浏览器')) {
-          rejectCommand(new Error(`场景「${stage}」检测到 dist 自启动了未跟踪浏览器，终止以防漏进程:\n`
-            + formatCommandTranscript(stage, { code: code ?? 1, signal, stdout, stderr })));
+          rejectCommand(
+            new Error(
+              `场景「${stage}」检测到 dist 自启动了未跟踪浏览器，终止以防漏进程:\n` +
+                formatCommandTranscript(stage, { code: code ?? 1, signal, stdout, stderr }),
+            ),
+          );
           return;
         }
         const result = { code: code ?? 1, signal, stdout, stderr };
@@ -560,10 +582,22 @@ export class IntegrationHarness {
 
   private async cleanupInner(): Promise<void> {
     const errors: string[] = [];
-    try { await this.stopActiveCommands(); } catch (error: unknown) { errors.push(errorText(error)); }
-    try { await this.stopBrowser(); } catch (error: unknown) { errors.push(errorText(error)); }
+    try {
+      await this.stopActiveCommands();
+    } catch (error: unknown) {
+      errors.push(errorText(error));
+    }
+    try {
+      await this.stopBrowser();
+    } catch (error: unknown) {
+      errors.push(errorText(error));
+    }
     if (this.fixture) {
-      try { await closeServer(this.fixture.server); } catch (error: unknown) { errors.push(errorText(error)); }
+      try {
+        await closeServer(this.fixture.server);
+      } catch (error: unknown) {
+        errors.push(errorText(error));
+      }
       this.fixture = null;
     }
     const removed = this.home;
@@ -584,7 +618,9 @@ export class IntegrationHarness {
     for (const child of this.activeCommands) terminateTreeSync(child, true);
     if (this.browser) terminateTreeSync(this.browser.child, true);
     if (this.home) {
-      try { rmSync(this.home, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch {}
+      try {
+        rmSync(this.home, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {}
     }
   }
 }

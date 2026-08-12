@@ -14,9 +14,12 @@ declare const __CDP_ARG__: FillArgs;
   if (!el) return setResult(notFoundResult(__CDP_ARG__));
   if (!['INPUT', 'TEXTAREA', 'SELECT', '[contenteditable=true]'].some(x => el.matches(x)))
     return setResult({ ok: false, err: '不是输入元素: ' + el.tagName });
-  const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype
-             : el.tagName === 'INPUT' ? HTMLInputElement.prototype
-             : HTMLElement.prototype;
+  const proto =
+    el.tagName === 'TEXTAREA'
+      ? HTMLTextAreaElement.prototype
+      : el.tagName === 'INPUT'
+        ? HTMLInputElement.prototype
+        : HTMLElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, 'value')!.set!;
   setter.call(el, __CDP_ARG__.value);
   el.dispatchEvent(new Event('input', { bubbles: true }));

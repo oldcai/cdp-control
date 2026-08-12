@@ -20,18 +20,29 @@ export function pidFilePath(): string {
 async function spawnDaemon(): Promise<void> {
   const script = process.argv[1] || __filename;
   // 把当前浏览器端口(经 ensureBrowser 从 browser.json 同步的 PORT)注入 daemon,daemon 连对端口。
-  const child = spawn(process.execPath, [script, '__daemon'], { detached: true, stdio: 'ignore', env: { ...process.env, CDP_PORT: String(PORT) } });
+  const child = spawn(process.execPath, [script, '__daemon'], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, CDP_PORT: String(PORT) },
+  });
   child.unref();
 }
 
 export async function daemonHealthy(port = LOGS_PORT): Promise<boolean> {
-  try { const r = await fetch(`http://127.0.0.1:${port}/health`); return r.ok; } catch { return false; }
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/health`);
+    return r.ok;
+  } catch {
+    return false;
+  }
 }
 
 // 异步确保 daemon 在跑(打开页面时自动注入守护;失败不阻塞主流程)。
 export async function maybeSpawnDaemon(): Promise<void> {
   if (cdpNoAutostart()) return;
-  try { await ensureDaemon(); } catch {}
+  try {
+    await ensureDaemon();
+  } catch {}
 }
 
 export async function ensureDaemon(port = LOGS_PORT): Promise<number> {
@@ -67,10 +78,16 @@ export async function cmdListen(): Promise<never> {
 
   async function injectMon(target: Target): Promise<void> {
     let ws: WebSocket;
-    try { ws = await pageWs(target); } catch { return; }
+    try {
+      ws = await pageWs(target);
+    } catch {
+      return;
+    }
     attached.set(target.id, ws);
     ws.onclose = () => attached.delete(target.id);
-    try { await attachInject(ws); } catch {}
+    try {
+      await attachInject(ws);
+    } catch {}
   }
 
   // 看门狗:浏览器被关掉后 /json/list 会持续探测失败。连续 WATCHDOG_POLLS 次(约 5s)
@@ -79,9 +96,16 @@ export async function cmdListen(): Promise<never> {
   const WATCHDOG_POLLS = 10;
   async function sync(): Promise<void> {
     let list: Target[];
-    try { list = await listTargets(); } catch {
+    try {
+      list = await listTargets();
+    } catch {
       deadPolls++;
-      if (deadPolls >= WATCHDOG_POLLS) { try { unlinkSync(pidFilePath()); } catch {} process.exit(0); }
+      if (deadPolls >= WATCHDOG_POLLS) {
+        try {
+          unlinkSync(pidFilePath());
+        } catch {}
+        process.exit(0);
+      }
       return;
     }
     deadPolls = 0;
@@ -91,14 +115,29 @@ export async function cmdListen(): Promise<never> {
   const server = createServer(async (req: any, res: any) => {
     const url = new URL(req.url, `http://127.0.0.1:${LOGS_PORT}`);
     res.setHeader('content-type', 'application/json; charset=utf-8');
-    if (url.pathname === '/health') { res.end(JSON.stringify({ ok: true, targets: attached.size })); return; }
-    if (url.pathname === '/shutdown') { try { unlinkSync(pidFilePath()); } catch {} server.close(); process.exit(0); }
-    res.statusCode = 404; res.end('{}');
+    if (url.pathname === '/health') {
+      res.end(JSON.stringify({ ok: true, targets: attached.size }));
+      return;
+    }
+    if (url.pathname === '/shutdown') {
+      try {
+        unlinkSync(pidFilePath());
+      } catch {}
+      server.close();
+      process.exit(0);
+    }
+    res.statusCode = 404;
+    res.end('{}');
   });
 
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(LOGS_PORT, '127.0.0.1', resolve); });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(LOGS_PORT, '127.0.0.1', resolve);
+  });
   await sync();
-  setInterval(() => { sync().catch(() => {}); }, 500);
+  setInterval(() => {
+    sync().catch(() => {});
+  }, 500);
   writeFileSync(pidFilePath(), String(process.pid));
   process.on('SIGINT', () => process.exit(0));
   process.on('SIGTERM', () => process.exit(0));
@@ -106,7 +145,10 @@ export async function cmdListen(): Promise<never> {
   return new Promise<never>(() => {});
 }
 
-export interface LogsOpts { level?: string; since?: number }
+export interface LogsOpts {
+  level?: string;
+  since?: number;
+}
 
 /**
  * 读 target 的控制台日志:幂等注入监控脚本 + 读取 window.__cdpLogs(结构化嵌套对象)。
@@ -114,7 +156,12 @@ export interface LogsOpts { level?: string; since?: number }
 export async function logs(target: Target | string, opts: LogsOpts = {}): Promise<any[]> {
   maybeSpawnDaemon().catch(() => {});
   if (typeof target === 'string') target = await resolve(target);
-  const levelSet = opts.level ? opts.level.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : null;
+  const levelSet = opts.level
+    ? opts.level
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean)
+    : null;
   const since = opts.since || 0;
   const value = await evaluate(target, readExpr(levelSet, since), 30000);
   return Array.isArray(value) ? value : [];
@@ -126,8 +173,14 @@ export async function logs(target: Target | string, opts: LogsOpts = {}): Promis
  */
 export async function injectMonitor(target: Target): Promise<boolean> {
   let ws: WebSocket;
-  try { ws = await pageWs(target); } catch { return false; }
-  try { await attachInject(ws); } catch {}
+  try {
+    ws = await pageWs(target);
+  } catch {
+    return false;
+  }
+  try {
+    await attachInject(ws);
+  } catch {}
   ws.close();
   return true;
 }

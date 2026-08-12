@@ -2,12 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import test from 'node:test';
-import {
-  discoverInstalledBrowsers,
-  IntegrationHarness,
-  REPO_ROOT,
-  type CommandResult,
-} from './harness.ts';
+import { discoverInstalledBrowsers, IntegrationHarness, REPO_ROOT, type CommandResult } from './harness.ts';
 import { browserRequired } from '../integration-policy.ts';
 
 const TARGET_MARKER = 'CDP Integration Fixture';
@@ -63,8 +58,10 @@ test('本地 fixture 通过 headless 真浏览器走完整 CDP 链路', { timeou
   try {
     await harness.start();
     const relativeHome = relative(join(REPO_ROOT, 'tmp'), harness.home);
-    assert.ok(relativeHome && !relativeHome.startsWith('..') && !isAbsolute(relativeHome),
-      `CDP_HOME 应位于项目 tmp/: ${harness.home}`);
+    assert.ok(
+      relativeHome && !relativeHome.startsWith('..') && !isAbsolute(relativeHome),
+      `CDP_HOME 应位于项目 tmp/: ${harness.home}`,
+    );
     assert.ok(harness.cdpPort >= 40_000, `CDP 端口应为高位端口: ${harness.cdpPort}`);
     assert.ok(![9222, 9223].includes(harness.cdpPort), '严禁使用 9222/9223');
     assert.ok(![9222, 9223].includes(harness.fixturePort), 'fixture 严禁使用 9222/9223');
@@ -84,9 +81,10 @@ test('本地 fixture 通过 headless 真浏览器走完整 CDP 链路', { timeou
     assert.match(listed.stdout, /CDP Integration Fixture/);
 
     await t.test('① view 建树包含 ref、输入框 value 与语义状态', { timeout: 30_000 }, async () => {
-      const result = await harness.runCli([
-        'view', '--tree', '--scroll-to-load', '--scroll-wait', '0', '--target', TARGET_MARKER,
-      ], '① view 建树');
+      const result = await harness.runCli(
+        ['view', '--tree', '--scroll-to-load', '--scroll-wait', '0', '--target', TARGET_MARKER],
+        '① view 建树',
+      );
       assertSuccess(result, 'view');
       assert.match(result.stderr, /→ target: CDP Integration Fixture/);
       assert.match(result.stdout, /^# \[ref=i 状态\]=/);
@@ -110,29 +108,33 @@ test('本地 fixture 通过 headless 真浏览器走完整 CDP 链路', { timeou
     });
 
     await t.test('② find --text 为初始 view 后新增的 DOM 登记新 ref', { timeout: 30_000 }, async () => {
-      const before = await harness.runCli([
-        'eval', '--target', TARGET_MARKER, 'window.__cdpRefs ? window.__cdpRefs.length : -1',
-      ], '② 读取 find 前 ref 数');
+      const before = await harness.runCli(
+        ['eval', '--target', TARGET_MARKER, 'window.__cdpRefs ? window.__cdpRefs.length : -1'],
+        '② 读取 find 前 ref 数',
+      );
       assertSuccess(before, 'find 前 ref 数');
       const beforeCount = numberValue(before.stdout);
       assert.ok(beforeCount > 0, '初始 view 应已建立 ref 表');
 
-      const added = await harness.runCli([
-        'eval', '--target', TARGET_MARKER, 'window.fixtureAddFindTarget()',
-      ], '② 追加动态 DOM');
+      const added = await harness.runCli(
+        ['eval', '--target', TARGET_MARKER, 'window.fixtureAddFindTarget()'],
+        '② 追加动态 DOM',
+      );
       assertSuccess(added, '追加动态 DOM');
       assert.equal(jsonValue(added.stdout), true);
 
-      const found = await harness.runCli([
-        'find', '--text', 'Find Newly Added Reference', '--target', TARGET_MARKER,
-      ], '② find --text');
+      const found = await harness.runCli(
+        ['find', '--text', 'Find Newly Added Reference', '--target', TARGET_MARKER],
+        '② find --text',
+      );
       assertSuccess(found, 'find --text');
       const foundLine = lineContaining(found.stdout, 'Find Newly Added Reference');
       const foundRef = refFromLine(foundLine);
 
-      const after = await harness.runCli([
-        'eval', '--target', TARGET_MARKER, 'window.__cdpRefs.length',
-      ], '② 读取 find 后 ref 数');
+      const after = await harness.runCli(
+        ['eval', '--target', TARGET_MARKER, 'window.__cdpRefs.length'],
+        '② 读取 find 后 ref 数',
+      );
       assertSuccess(after, 'find 后 ref 数');
       assert.equal(foundRef, beforeCount, '新 ref 应追加在原 ref 表尾部');
       assert.equal(numberValue(after.stdout), beforeCount + 1, 'find 只应新登记该目标一次');
@@ -140,28 +142,34 @@ test('本地 fixture 通过 headless 真浏览器走完整 CDP 链路', { timeou
 
     await t.test('③ click 走坐标输入链，feedback 感知新增 DOM', { timeout: 30_000 }, async () => {
       assert.ok(clickRef >= 0, '必须先从 view 取得 click ref');
-      const result = await harness.runCli([
-        'click', String(clickRef), '--feedback-delay', '80', '--target', TARGET_MARKER,
-      ], '③ 坐标 click + feedback');
+      const result = await harness.runCli(
+        ['click', String(clickRef), '--feedback-delay', '80', '--target', TARGET_MARKER],
+        '③ 坐标 click + feedback',
+      );
       assertSuccess(result, 'click');
       assert.match(result.stdout, new RegExp(`已点击: ref=${clickRef} \\(button\\)`));
       assert.match(result.stdout, /selector 为: #trusted-click/);
       assert.match(result.stdout, /页面变化 · 新增内容:/);
-      assert.match(result.stdout, /Trusted click observed: isTrusted=true/,
-        'event.isTrusted=true 证明未退回 DOM el.click() 合成路径');
+      assert.match(
+        result.stdout,
+        /Trusted click observed: isTrusted=true/,
+        'event.isTrusted=true 证明未退回 DOM el.click() 合成路径',
+      );
     });
 
     await t.test('④ fill 后二次 view 回显最新 value', { timeout: 30_000 }, async () => {
       assert.ok(inputRef >= 0, '必须先从 view 取得 input ref');
-      const filled = await harness.runCli([
-        'fill', String(inputRef), 'after fill', '--no-feedback', '--target', TARGET_MARKER,
-      ], '④ fill');
+      const filled = await harness.runCli(
+        ['fill', String(inputRef), 'after fill', '--no-feedback', '--target', TARGET_MARKER],
+        '④ fill',
+      );
       assertSuccess(filled, 'fill');
       assert.match(filled.stdout, new RegExp(`已填入: ref=${inputRef} ← after fill`));
 
-      const viewed = await harness.runCli([
-        'view', '--tree', '--scroll-to-load', '--scroll-wait', '0', '--target', TARGET_MARKER,
-      ], '④ fill 后 view');
+      const viewed = await harness.runCli(
+        ['view', '--tree', '--scroll-to-load', '--scroll-wait', '0', '--target', TARGET_MARKER],
+        '④ fill 后 view',
+      );
       assertSuccess(viewed, 'fill 后 view');
       const line = lineContaining(viewed.stdout, 'value="after fill"');
       assert.equal(refFromLine(line), inputRef, '已登记元素应复用原 ref');
@@ -170,28 +178,31 @@ test('本地 fixture 通过 headless 真浏览器走完整 CDP 链路', { timeou
     await t.test('⑤ 持久 fold 规则按 host/path/selector 命中并折叠子树', { timeout: 30_000 }, async () => {
       assert.match(initialView, /FOLD_SECRET_SHOULD_HIDE/);
       harness.writeFoldRule('1\t127.0.0.1\t/fixture\t#fold-region\tFixture folded region\n');
-      const result = await harness.runCli([
-        'view', '--tree', '--scroll-to-load', '--scroll-wait', '0', '--target', TARGET_MARKER,
-      ], '⑤ fold 规则命中');
+      const result = await harness.runCli(
+        ['view', '--tree', '--scroll-to-load', '--scroll-wait', '0', '--target', TARGET_MARKER],
+        '⑤ fold 规则命中',
+      );
       assertSuccess(result, 'fold view');
       assert.match(result.stdout, /▸ \[ref=\d+(?:·屏)?\] Fixture folded region/);
-      assert.doesNotMatch(result.stdout, /FOLD_SECRET_SHOULD_HIDE/,
-        '命中 fold 后子树文本不应泄露到 view');
+      assert.doesNotMatch(result.stdout, /FOLD_SECRET_SHOULD_HIDE/, '命中 fold 后子树文本不应泄露到 view');
     });
 
     await t.test('⑥ DOM 删除后 stale ref 返回 refInvalid 与 recovered 局部视图', { timeout: 30_000 }, async () => {
       assert.ok(recoveryRef >= 0, '必须先从完整 view 取得 recovery ref');
-      const removed = await harness.runCli([
-        'eval', '--target', TARGET_MARKER,
-        `document.querySelector('#recovery-target').remove(); true`,
-      ], '⑥ 删除 ref 对应 DOM');
+      const removed = await harness.runCli(
+        ['eval', '--target', TARGET_MARKER, `document.querySelector('#recovery-target').remove(); true`],
+        '⑥ 删除 ref 对应 DOM',
+      );
       assertSuccess(removed, '删除 recovery DOM');
       assert.equal(jsonValue(removed.stdout), true);
 
-      const script = harness.writeTempScript('recovery-check.js', `
+      const script = harness.writeTempScript(
+        'recovery-check.js',
+        `
 const target = await cdp.resolve(${JSON.stringify(TARGET_MARKER)});
 return await cdp.click(target, { ref: ${recoveryRef} }, { noFeedback: true });
-`);
+`,
+      );
       const raw = await harness.runCli(['run', script], '⑥ 断言 refInvalid/recovered 原始返回');
       assertSuccess(raw, 'recovery run');
       const recovery = recordValue(jsonValue(raw.stdout), 'recovery 返回');
@@ -203,9 +214,10 @@ return await cdp.click(target, { ref: ${recoveryRef} }, { noFeedback: true });
       assert.match((recovered.lines as unknown[]).join('\n'), /Recovery anchor survives/);
       assert.equal(recovery.feedback, null);
 
-      const human = await harness.runCli([
-        'click', String(recoveryRef), '--no-feedback', '--target', TARGET_MARKER,
-      ], '⑥ CLI 自愈回显');
+      const human = await harness.runCli(
+        ['click', String(recoveryRef), '--no-feedback', '--target', TARGET_MARKER],
+        '⑥ CLI 自愈回显',
+      );
       assertSuccess(human, 'stale ref click');
       assert.match(human.stdout, /ref 失效 → 已自动 view 最近存活容器/);
       assert.match(human.stdout, /Recovery anchor survives/);
@@ -214,9 +226,10 @@ return await cdp.click(target, { ref: ${recoveryRef} }, { noFeedback: true });
 
     await t.test('⑦ article 以 ref 为根输出保序 Markdown', { timeout: 30_000 }, async () => {
       assert.ok(articleHeadingRef >= 0, '必须先从 view 取得 article 标题 ref');
-      const result = await harness.runCli([
-        'article', String(articleHeadingRef), '--ancestor', '1', '--target', TARGET_MARKER,
-      ], '⑦ article Markdown');
+      const result = await harness.runCli(
+        ['article', String(articleHeadingRef), '--ancestor', '1', '--target', TARGET_MARKER],
+        '⑦ article Markdown',
+      );
       assertSuccess(result, 'article');
       assert.match(result.stdout, /^# Integration Heading/m);
       assert.match(result.stdout, /\[Example link\]\(https:\/\/example\.test\/docs\)/);
@@ -228,9 +241,10 @@ return await cdp.click(target, { ref: ${recoveryRef} }, { noFeedback: true });
     });
 
     await t.test('⑧ selector 不存在时非零退出且 stderr 清晰', { timeout: 30_000 }, async () => {
-      const result = await harness.runCli([
-        'click', '#selector-does-not-exist', '--no-feedback', '--target', TARGET_MARKER,
-      ], '⑧ selector 错误路径');
+      const result = await harness.runCli(
+        ['click', '#selector-does-not-exist', '--no-feedback', '--target', TARGET_MARKER],
+        '⑧ selector 错误路径',
+      );
       assert.equal(result.code, 1, `错误路径应退出 1:\n${result.stderr}`);
       assert.equal(result.stdout.trim(), '');
       assert.match(result.stderr, /→ target: CDP Integration Fixture/);

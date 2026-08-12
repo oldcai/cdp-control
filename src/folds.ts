@@ -39,7 +39,8 @@ export function domainMatch(domain: string, hostname: string): boolean {
     const base = domain.slice(2);
     return hostname === base || hostname.endsWith('.' + base);
   }
-  if (domain.endsWith('.*')) { // entity: base 为域名段,其后接任意单段 TLD(可带子域)
+  if (domain.endsWith('.*')) {
+    // entity: base 为域名段,其后接任意单段 TLD(可带子域)
     const base = domain.slice(0, -2);
     return new RegExp(`(^|\\.)${base}(\\.[^.]+)?$`).test(hostname);
   }
@@ -77,8 +78,11 @@ export function parseRules(text: string): FoldRule[] {
 export function loadFolds(): FoldRule[] {
   const p = foldsPath();
   if (!existsSync(p)) return [];
-  try { return parseRules(readFileSync(p, 'utf8')); }
-  catch { return []; }
+  try {
+    return parseRules(readFileSync(p, 'utf8'));
+  } catch {
+    return [];
+  }
 }
 
 /** 筛选匹配某 hostname(+pathname)的规则:domainMatch 外,path 再 glob 命中。 */

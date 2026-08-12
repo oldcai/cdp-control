@@ -33,7 +33,11 @@ async function main() {
   await build({
     entryPoints: [join(src, 'cdp.ts')],
     outfile: join(dist, 'cdp.js'),
-    bundle: true, format: 'cjs', platform: 'node', target: 'node21', sourcemap: false,
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    target: 'node21',
+    sourcemap: false,
     external: ['node:fs', 'node:path'],
     // 只给 cdp bundle 加 shebang,支持 `npm link` 全局直接执行 cdp-control(dist 每次重建覆盖)。
     banner: { js: '#!/usr/bin/env node' },
@@ -66,4 +70,7 @@ async function main() {
   console.log('✅ build 完成 → dist/');
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(e => {
+  console.error(e);
+  process.exit(1);
+});

@@ -24,8 +24,9 @@ async function withRecipes(files: Record<string, string>, fn: () => Promise<void
   const recipesDir = join(dir, 'recipes');
   mkdirSync(recipesDir, { recursive: true });
   for (const [name, body] of Object.entries(files)) writeFileSync(join(recipesDir, name), body);
-  try { await fn(); }
-  finally {
+  try {
+    await fn();
+  } finally {
     process.env.CDP_RULES_DEFAULT_DIR = prev;
     rmSync(dir, { recursive: true, force: true });
   }
@@ -35,62 +36,74 @@ const mkRule = (name: string, scope: string | string[], extract = 'async () => (
   `{ name: ${JSON.stringify(name)}, scope: ${JSON.stringify(scope)}, extract: ${extract} }`;
 
 test('同文件多规则:不同 scope 各命中各自的 extract 名', async () => {
-  await withRecipes({
-    'zhihu.js': `module.exports = [
+  await withRecipes(
+    {
+      'zhihu.js': `module.exports = [
       ${mkRule('问题页', 'www.zhihu.com/question/*', 'async () => ({ lines: ["question"] })')},
       ${mkRule('专栏', 'zhuanlan.zhihu.com/p/*', 'async () => ({ lines: ["zhuanlan"] })')},
     ];`,
-  }, async () => {
-    const q = await matchRecipe('https://www.zhihu.com/question/123');
-    const z = await matchRecipe('https://zhuanlan.zhihu.com/p/5678');
-    assert.equal(q!.rule.name, '问题页');
-    assert.equal(z!.rule.name, '专栏');
-  });
+    },
+    async () => {
+      const q = await matchRecipe('https://www.zhihu.com/question/123');
+      const z = await matchRecipe('https://zhuanlan.zhihu.com/p/5678');
+      assert.equal(q!.rule.name, '问题页');
+      assert.equal(z!.rule.name, '专栏');
+    },
+  );
 });
 
 test('一规则多形态 scope(数组):任一形态命中即该规则', async () => {
-  await withRecipes({
-    'site.js': `module.exports = [
+  await withRecipes(
+    {
+      'site.js': `module.exports = [
       { name: '同布局两形态', scope: ['a.example.com/p/*', 'b.example.com/*'], extract: async () => ({ lines: ["x"] }) },
     ];`,
-  }, async () => {
-    const a = await matchRecipe('https://a.example.com/p/1');
-    const b = await matchRecipe('https://b.example.com/2');
-    const c = await matchRecipe('https://c.example.com/3');
-    assert.equal(a!.rule.name, '同布局两形态');
-    assert.equal(b!.rule.name, '同布局两形态');
-    assert.equal(c, null);
-  });
+    },
+    async () => {
+      const a = await matchRecipe('https://a.example.com/p/1');
+      const b = await matchRecipe('https://b.example.com/2');
+      const c = await matchRecipe('https://c.example.com/3');
+      assert.equal(a!.rule.name, '同布局两形态');
+      assert.equal(b!.rule.name, '同布局两形态');
+      assert.equal(c, null);
+    },
+  );
 });
 
 test('主机名字面量:www 通配不会跨子域吞 zhuanlan', async () => {
-  await withRecipes({
-    'zhihu.js': `module.exports = [
+  await withRecipes(
+    {
+      'zhihu.js': `module.exports = [
       ${mkRule('www宽', 'www.zhihu.com/*')},
     ];`,
-  }, async () => {
-    // 主机名字面量 glob:www.zhihu.com/* 只匹配 www,不吞 zhuanlan 子域
-    const w = await matchRecipe('https://www.zhihu.com/question/1');
-    const z = await matchRecipe('https://zhuanlan.zhihu.com/p/2');
-    assert.equal(w!.rule.name, 'www宽');
-    assert.equal(z, null);
-  });
+    },
+    async () => {
+      // 主机名字面量 glob:www.zhihu.com/* 只匹配 www,不吞 zhuanlan 子域
+      const w = await matchRecipe('https://www.zhihu.com/question/1');
+      const z = await matchRecipe('https://zhuanlan.zhihu.com/p/2');
+      assert.equal(w!.rule.name, 'www宽');
+      assert.equal(z, null);
+    },
+  );
 });
 
 test('跨文件规则级全序:通配符最少 → scope 更长 → 声明顺序', async () => {
-  await withRecipes({
-    'a.js': `module.exports = [
+  await withRecipes(
+    {
+      'a.js': `module.exports = [
       ${mkRule('宽泛', 'example.com/*')},
     ];`,
-    'b.js': `module.exports = [
+      'b.js': `module.exports = [
       ${mkRule('精确', 'example.com/p/*')},
     ];`,
-  }, async () => {
-    const m = await matchRecipe('https://example.com/p/1');
-    // 两者通配符数相同(各 1 个 *),按 scope 更长 tiebreak → 精确(example.com/p/*)胜
-    assert.equal(m!.rule.name, '精确');
-    assert.equal(m!.file, 'b.js');
-  });
+    },
+    async () => {
+      const m = await matchRecipe('https://example.com/p/1');
+      // 两者通配符数相同(各 1 个 *),按 scope 更长 tiebreak → 精确(example.com/p/*)胜
+      assert.equal(m!.rule.name, '精确');
+      assert.equal(m!.file, 'b.js');
+    },
+  );
 });
 
 // ────────────────────────── _lib.js 共享工具 ──────────────────────────

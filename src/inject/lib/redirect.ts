@@ -34,9 +34,7 @@ export function decodeRedirectUrl(href: string): string {
   } catch {
     return href;
   }
-  const rule = REDIRECT_RULES.find(
-    r => r.host === url.hostname && (r.path === undefined || r.path === url.pathname)
-  );
+  const rule = REDIRECT_RULES.find(r => r.host === url.hostname && (r.path === undefined || r.path === url.pathname));
   if (!rule) return href;
   const raw = url.searchParams.get(rule.param);
   if (!raw) return href;

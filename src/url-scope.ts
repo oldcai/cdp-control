@@ -17,7 +17,11 @@ export function globToRegExp(pat: string): RegExp {
 /** 从 url 提取 hostname;非法/空白返回 ''(about:blank 等不参与规则匹配)。 */
 export function hostOf(url: string | undefined): string {
   if (!url) return '';
-  try { return new URL(url).hostname; } catch { return ''; }
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
 }
 
 /** 从 url 提取 pathname(含根 /);非法/about:blank/无 hostname 返回 ''。 */
@@ -27,7 +31,9 @@ export function pathOf(url: string | undefined): string {
     const u = new URL(url);
     if (!u.hostname) return '';
     return u.pathname || '/';
-  } catch { return ''; }
+  } catch {
+    return '';
+  }
 }
 
 /** url 是否命中作用域 pattern(glob,匹配 hostname+pathname 拼接串)。无 hostname 一律不命中。 */
@@ -36,5 +42,7 @@ export function urlMatches(pattern: string, url: string): boolean {
     const u = new URL(url);
     if (!u.hostname) return false;
     return globToRegExp(pattern).test(u.hostname + u.pathname);
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }

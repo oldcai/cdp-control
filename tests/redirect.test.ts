@@ -9,35 +9,35 @@ import { decodeRedirectUrl } from '../src/inject/lib/redirect.ts';
 test('知乎跳转解回真实 URL(单层百分号编码)', () => {
   assert.equal(
     decodeRedirectUrl('https://link.zhihu.com/?target=https%3A%2F%2Fgithub.com%2Fcloudflare%2Fcloudflare-os'),
-    'https://github.com/cloudflare/cloudflare-os'
+    'https://github.com/cloudflare/cloudflare-os',
   );
 });
 
 test('掘金跳转解回真实 URL', () => {
   assert.equal(
     decodeRedirectUrl('https://link.juejin.cn/?target=https%3A%2F%2Fcaniuse.com%2F'),
-    'https://caniuse.com/'
+    'https://caniuse.com/',
   );
 });
 
 test('Facebook l.php 的 u 参数解回真实 URL(忽略 h/s/enc 等其他参数)', () => {
   assert.equal(
     decodeRedirectUrl('https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Fpage&h=AT0abc&s=1'),
-    'https://example.com/page'
+    'https://example.com/page',
   );
 });
 
 test('Google /url 的 q 参数解回真实 URL', () => {
   assert.equal(
     decodeRedirectUrl('https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fa%3Fb%3Dc&sa=D'),
-    'https://example.com/a?b=c'
+    'https://example.com/a?b=c',
   );
 });
 
 test('双重编码(再套一层 encodeURIComponent)最多解两轮到干净 URL', () => {
   assert.equal(
     decodeRedirectUrl('https://link.zhihu.com/?target=https%253A%252F%252Fexample.com%252Fx'),
-    'https://example.com/x'
+    'https://example.com/x',
   );
 });
 
@@ -62,10 +62,7 @@ test('javascript: 协议目标 → 拒绝,原样返回', () => {
 });
 
 test('// 协议相对目标 → 放行', () => {
-  assert.equal(
-    decodeRedirectUrl('https://link.zhihu.com/?target=%2F%2Fcdn.example.com%2Fx'),
-    '//cdn.example.com/x'
-  );
+  assert.equal(decodeRedirectUrl('https://link.zhihu.com/?target=%2F%2Fcdn.example.com%2Fx'), '//cdn.example.com/x');
 });
 
 test('未命中白名单 host → 原样返回', () => {

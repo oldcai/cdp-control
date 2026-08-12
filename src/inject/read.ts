@@ -28,30 +28,43 @@ declare const __CDP_ARG__: ReadArgs;
       if (t !== 'object') return String(v);
       if (d > 8) return '[深]';
       if (v instanceof Error) return { name: v.name, message: v.message };
-      if (Array.isArray(v)) { const a: any[] = []; for (let i = 0; i < v.length && i < 50; i++) a.push(struct(v[i], d + 1)); return a; }
+      if (Array.isArray(v)) {
+        const a: any[] = [];
+        for (let i = 0; i < v.length && i < 50; i++) a.push(struct(v[i], d + 1));
+        return a;
+      }
       if (v.nodeType) return '<' + (v.nodeName || '?') + (v.id ? '#' + v.id : '') + '>';
       if (seen.has(v)) return '[循环]';
       seen.add(v);
       const o: any = {};
       let n = 0;
       for (const k in v) {
-        if (n++ >= 30) { o['...'] = '(+more)'; break; }
-        try { o[k] = struct(v[k], d + 1); } catch { o[k] = String(v[k]); }
+        if (n++ >= 30) {
+          o['...'] = '(+more)';
+          break;
+        }
+        try {
+          o[k] = struct(v[k], d + 1);
+        } catch {
+          o[k] = String(v[k]);
+        }
       }
       return o;
     };
   }
 
-  const out = arr.filter((e: any) => e.ts >= since && filter(e)).map((e: any) => {
-    const struct = makeStruct();
-    const o: any = { ts: e.ts, type: e.type, level: e.level, args: (e.args || []).map((a: any) => struct(a, 0)) };
-    if (e.stack) o.stack = e.stack;
-    if (e.message) o.message = e.message;
-    if (e.source) o.source = e.source;
-    if (e.line != null) o.line = e.line;
-    if (e.col != null) o.col = e.col;
-    if (e.reason !== undefined) o.reason = struct(e.reason, 0);
-    return o;
-  });
+  const out = arr
+    .filter((e: any) => e.ts >= since && filter(e))
+    .map((e: any) => {
+      const struct = makeStruct();
+      const o: any = { ts: e.ts, type: e.type, level: e.level, args: (e.args || []).map((a: any) => struct(a, 0)) };
+      if (e.stack) o.stack = e.stack;
+      if (e.message) o.message = e.message;
+      if (e.source) o.source = e.source;
+      if (e.line != null) o.line = e.line;
+      if (e.col != null) o.col = e.col;
+      if (e.reason !== undefined) o.reason = struct(e.reason, 0);
+      return o;
+    });
   return setResult(out);
 })();

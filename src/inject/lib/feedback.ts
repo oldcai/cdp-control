@@ -32,16 +32,38 @@ export interface FeedbackResult {
 }
 
 /** 一个去重后的新增内容块:lines 为该块 view 行,count 为它在本次出现的次数(重复块折叠)。 */
-export interface FeedbackBlock { lines: string[]; count: number }
+export interface FeedbackBlock {
+  lines: string[];
+  count: number;
+}
 
 /** 一次文本变化:before 为旧值(可缺),after 为新值;note 给折叠摘要用(如"播放进度,已折叠 N 条")。 */
-export interface FeedbackChange { before?: string; after: string; note?: string }
+export interface FeedbackChange {
+  before?: string;
+  after: string;
+  note?: string;
+}
 
 /** 一次白名单属性变化。class 的 before/after 分别只含移除/新增 token；其他属性保留原值(null=不存在)。 */
-export interface FeedbackAttr { desc: string; attr: string; before: string | null; after: string | null }
+export interface FeedbackAttr {
+  desc: string;
+  attr: string;
+  before: string | null;
+  after: string | null;
+}
 
-interface PendingFeedbackAttr { el: Element; attr: string; before: string | null; after: string | null }
-interface FeedbackState { added: Node[]; changes: FeedbackChange[]; attrs: PendingFeedbackAttr[]; document: Document }
+interface PendingFeedbackAttr {
+  el: Element;
+  attr: string;
+  before: string | null;
+  after: string | null;
+}
+interface FeedbackState {
+  added: Node[];
+  changes: FeedbackChange[];
+  attrs: PendingFeedbackAttr[];
+  document: Document;
+}
 
 /** shadow 递归观察深度上限(防极深 shadow 树导致 observer 爆炸;B站等典型页面 shadow 嵌套 ≤3)。 */
 const MAX_SHADOW_DEPTH = 3;
@@ -51,8 +73,16 @@ const IGNORE_SUBTREE_OF = ['VIDEO', 'AUDIO', 'CANVAS'];
 
 /** 属性反馈白名单：仅语义状态、对应原生布尔属性与 class；其他高频属性一律不观察输出。 */
 const FEEDBACK_ATTR_LIST = [
-  'aria-pressed', 'aria-checked', 'aria-expanded', 'aria-selected', 'aria-disabled',
-  'checked', 'disabled', 'open', 'selected', 'class',
+  'aria-pressed',
+  'aria-checked',
+  'aria-expanded',
+  'aria-selected',
+  'aria-disabled',
+  'checked',
+  'disabled',
+  'open',
+  'selected',
+  'class',
 ] as const;
 const FEEDBACK_ATTRS = new Set<string>(FEEDBACK_ATTR_LIST);
 
@@ -106,7 +136,10 @@ function describeElement(el: Element): string {
 
 /** 取 mutation 里新增/移除的直接文本节点文本。 */
 const textNodes = (nodes: NodeList): string[] =>
-  Array.from(nodes).filter(n => n.nodeType === 3).map(n => (n.nodeValue || '').trim()).filter(Boolean);
+  Array.from(nodes)
+    .filter(n => n.nodeType === 3)
+    .map(n => (n.nodeValue || '').trim())
+    .filter(Boolean);
 
 /**
  * 沿 parentElement + shadow host 上爬(穿透 shadow 边界),判定 node 是否在 IGNORE_SUBTREE_OF
@@ -116,7 +149,10 @@ function inIgnoredSubtree(node: Node): boolean {
   let n: Node | null = node;
   while (n) {
     if (n.nodeType === 1 && IGNORE_SUBTREE_OF.includes((n as Element).tagName)) return true;
-    if ((n as any).parentElement) { n = (n as any).parentElement; continue; }
+    if ((n as any).parentElement) {
+      n = (n as any).parentElement;
+      continue;
+    }
     const root = (n as any).getRootNode && (n as any).getRootNode();
     n = root && root instanceof ShadowRoot ? (root as ShadowRoot).host : null;
   }
@@ -180,7 +216,10 @@ export function startFeedback(): void {
       const root: Node = (n as any).getRootNode ? (n as any).getRootNode() : n;
       if (depthMap.has(root)) return depthMap.get(root)!;
       // 否则跨越 shadow 边界到 host 继续上爬(host 可能在更外层观察根内)。
-      if (root instanceof ShadowRoot) { n = (root as ShadowRoot).host; continue; }
+      if (root instanceof ShadowRoot) {
+        n = (root as ShadowRoot).host;
+        continue;
+      }
       return 0; // 已到 document 且未命中(理论不会发生,document 一定登记)
     }
     return 0;
@@ -190,16 +229,22 @@ export function startFeedback(): void {
   function observeAll(root: Node, depth: number): void {
     const mo = new MutationObserver(onMutate);
     mo.observe(root, {
-      childList: true, subtree: true, characterData: true, characterDataOldValue: true,
-      attributes: true, attributeOldValue: true, attributeFilter: [...FEEDBACK_ATTR_LIST],
+      childList: true,
+      subtree: true,
+      characterData: true,
+      characterDataOldValue: true,
+      attributes: true,
+      attributeOldValue: true,
+      attributeFilter: [...FEEDBACK_ATTR_LIST],
     });
     mos.push(mo);
     depthMap.set(root, depth);
     if (depth >= MAX_SHADOW_DEPTH) return; // 超深度不再下钻
     // 深度优先找 root 内带 shadowRoot 的元素,对其 shadowRoot 递归 observeAll。
-    const hostEls = root instanceof Document || root instanceof ShadowRoot
-      ? (root as any).querySelectorAll('*')
-      : (root as Element).querySelectorAll?.('*') ?? [];
+    const hostEls =
+      root instanceof Document || root instanceof ShadowRoot
+        ? (root as any).querySelectorAll('*')
+        : ((root as Element).querySelectorAll?.('*') ?? []);
     for (const el of Array.from(hostEls)) {
       const sr = (el as Element).shadowRoot;
       if (sr) observeAll(sr, depth + 1);
@@ -246,12 +291,17 @@ export function collectFeedback(opts: { viewport?: boolean } = {}): FeedbackResu
     const blines = formatView(t);
     if (!blines.length) continue;
     // 折叠签名去掉 ref 号(内容相同但 ref 不同的重复块应视为同一条,如重复广告)。
-    const sig = blines.join('\n').replace(
-      /\[ref=\d+(?:·屏)?(?: ([^\]]+))?\]/g,
-      (_match: string, states: string | undefined) => states ? `[${states}]` : '',
-    );
-    if (seen.has(sig)) { seen.get(sig)!.count++; }
-    else { seen.set(sig, { lines: blines, count: 1 }); order.push(sig); }
+    const sig = blines
+      .join('\n')
+      .replace(/\[ref=\d+(?:·屏)?(?: ([^\]]+))?\]/g, (_match: string, states: string | undefined) =>
+        states ? `[${states}]` : '',
+      );
+    if (seen.has(sig)) {
+      seen.get(sig)!.count++;
+    } else {
+      seen.set(sig, { lines: blines, count: 1 });
+      order.push(sig);
+    }
   }
   const blocks = order.map(s => seen.get(s)!);
   // 文本变化:过滤"前后相同"(无实质变化,如广告原地刷新)+ 折叠连续播放时间戳(01:55→01:56…)为一条;去重取前 5。
@@ -271,7 +321,10 @@ export function collectFeedback(opts: { viewport?: boolean } = {}): FeedbackResu
   const merged = new Map<Element, Map<string, PendingFeedbackAttr>>();
   for (const item of pendingAttrs) {
     let byAttr = merged.get(item.el);
-    if (!byAttr) { byAttr = new Map(); merged.set(item.el, byAttr); }
+    if (!byAttr) {
+      byAttr = new Map();
+      merged.set(item.el, byAttr);
+    }
     const current = byAttr.get(item.attr);
     if (current) current.after = item.after;
     else byAttr.set(item.attr, { ...item });
@@ -283,13 +336,17 @@ export function collectFeedback(opts: { viewport?: boolean } = {}): FeedbackResu
         const delta = diffClassTokens(item.before, item.after);
         if (!delta.added.length && !delta.removed.length) continue;
         attrItems.push({
-          desc: describeElement(item.el), attr: item.attr,
-          before: delta.removed.join(' '), after: delta.added.join(' '),
+          desc: describeElement(item.el),
+          attr: item.attr,
+          before: delta.removed.join(' '),
+          after: delta.added.join(' '),
         });
       } else if (item.before !== item.after) {
         attrItems.push({
-          desc: describeElement(item.el), attr: item.attr,
-          before: item.before, after: item.after,
+          desc: describeElement(item.el),
+          attr: item.attr,
+          before: item.before,
+          after: item.after,
         });
       }
     }
@@ -304,7 +361,10 @@ function hasAncestorInSet(el: Element, set: Set<Element>): boolean {
   while (n) {
     if (n.nodeType === 1 && set.has(n as Element)) return true;
     // shadow 边界:parentElement 为 null,但 rootNode 是 ShadowRoot 时跳到 host 继续。
-    if ((n as any).parentElement) { n = (n as any).parentElement; continue; }
+    if ((n as any).parentElement) {
+      n = (n as any).parentElement;
+      continue;
+    }
     const root = (n as any).getRootNode && (n as any).getRootNode();
     n = root && root instanceof ShadowRoot ? (root as ShadowRoot).host : null;
   }
@@ -324,11 +384,18 @@ export function foldTimestampRun(changes: FeedbackChange[]): FeedbackChange[] {
   while (i < changes.length) {
     const c = changes[i];
     const headTime = c.before != null && TIME.test(c.before) && TIME.test(c.after);
-    if (!headTime) { out.push(c); i++; continue; }
+    if (!headTime) {
+      out.push(c);
+      i++;
+      continue;
+    }
     let j = i + 1;
     while (j < changes.length) {
       const d = changes[j];
-      if (d.before != null && TIME.test(d.before) && TIME.test(d.after)) { j++; continue; }
+      if (d.before != null && TIME.test(d.before) && TIME.test(d.after)) {
+        j++;
+        continue;
+      }
       break;
     }
     const runLen = j - i;

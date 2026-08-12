@@ -17,7 +17,21 @@ import type { ArticleArgs } from './lib/arg';
 declare const __CDP_ARG__: ArticleArgs;
 
 /** 跳过不进入文章内容的标签。 */
-const NOISE = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'SVG', 'PATH', 'USE', 'SOURCE', 'PICTURE', 'IFRAME']);
+const NOISE = new Set([
+  'SCRIPT',
+  'STYLE',
+  'LINK',
+  'META',
+  'NOSCRIPT',
+  'TEMPLATE',
+  'HEAD',
+  'SVG',
+  'PATH',
+  'USE',
+  'SOURCE',
+  'PICTURE',
+  'IFRAME',
+]);
 
 /** 链接黑名单模式数组(Node 侧 ignore-links.ts 读入后经 __CDP_ARG__ 传入)。 */
 const ignoreLinks: string[] = __CDP_ARG__.ignoreLinks || [];
@@ -30,16 +44,28 @@ const INTERACTIVE = new Set(['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA']);
   const base = refElement(__CDP_ARG__.ref);
   if (!base) return setResult(notFoundResult({ ref: __CDP_ARG__.ref } as OperableArg));
   const el = climbAncestors(base, __CDP_ARG__.ancestor || 0);
-  if (!el) return setResult({ ok: false, err: `ref=${__CDP_ARG__.ref} 向上爬 ${__CDP_ARG__.ancestor || 0} 层后无元素` });
+  if (!el)
+    return setResult({ ok: false, err: `ref=${__CDP_ARG__.ref} 向上爬 ${__CDP_ARG__.ancestor || 0} 层后无元素` });
 
   const out: string[] = [];
   let cur = '';
   // 收拢当前行(行内文本),非空则落盘。
-  const flush = () => { const t = cur.replace(/\s+/g, ' ').trim(); if (t) out.push(t); cur = ''; };
+  const flush = () => {
+    const t = cur.replace(/\s+/g, ' ').trim();
+    if (t) out.push(t);
+    cur = '';
+  };
   // 发一个块:先收拢行内,再补空行分隔,最后 push 块文本。
-  const block = (t: string) => { flush(); if (!t) return; if (out.length && out[out.length - 1] !== '') out.push(''); out.push(t); };
+  const block = (t: string) => {
+    flush();
+    if (!t) return;
+    if (out.length && out[out.length - 1] !== '') out.push('');
+    out.push(t);
+  };
   // 行内追加(不立即 collapse,块收拢时统一)。
-  const inline = (t: string) => { if (t) cur += t; };
+  const inline = (t: string) => {
+    if (t) cur += t;
+  };
 
   /** 元素的直接文本(穿透不进子元素),空白归一化。链接/按钮用 own 文本避免子树聚合误导。 */
   const ownText = (e: Element): string => ownElText(e);
@@ -57,13 +83,25 @@ const INTERACTIVE = new Set(['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA']);
     if (tag === 'IMG') {
       const a = e.getAttribute('alt') || '';
       const s = e.getAttribute('src') || '';
-      return (a || s) ? `![${a}](${s})` : '';
+      return a || s ? `![${a}](${s})` : '';
     }
-    if (tag === 'B' || tag === 'STRONG') { const t = inlineContent(e, depth + 1).trim(); return t ? `**${t}**` : ''; }
-    if (tag === 'EM' || tag === 'I') { const t = inlineContent(e, depth + 1).trim(); return t ? `*${t}*` : ''; }
-    if (tag === 'CODE') { const t = (e.textContent || '').trim(); return t ? '`' + t + '`' : ''; }
+    if (tag === 'B' || tag === 'STRONG') {
+      const t = inlineContent(e, depth + 1).trim();
+      return t ? `**${t}**` : '';
+    }
+    if (tag === 'EM' || tag === 'I') {
+      const t = inlineContent(e, depth + 1).trim();
+      return t ? `*${t}*` : '';
+    }
+    if (tag === 'CODE') {
+      const t = (e.textContent || '').trim();
+      return t ? '`' + t + '`' : '';
+    }
     if (tag === 'BR') return '  ';
-    if (INTERACTIVE.has(tag)) { const l = elLabel(e); return l ? `[${l}]` : ''; }
+    if (INTERACTIVE.has(tag)) {
+      const l = elLabel(e);
+      return l ? `[${l}]` : '';
+    }
     return inlineContent(e, depth + 1); // 透明容器(span/div 等)
   }
 
@@ -72,7 +110,10 @@ const INTERACTIVE = new Set(['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA']);
     if (depth > 20) return '';
     let s = '';
     for (const n of Array.from(el.childNodes)) {
-      if (n.nodeType === 3) { s += n.nodeValue || ''; continue; }
+      if (n.nodeType === 3) {
+        s += n.nodeValue || '';
+        continue;
+      }
       if (n.nodeType !== 1) continue;
       const e = n as Element;
       if (NOISE.has(e.tagName)) continue;
@@ -92,7 +133,9 @@ const INTERACTIVE = new Set(['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA']);
       if (li.tagName !== 'LI') continue;
       const pad = '  '.repeat(indent);
       const marker = ordered ? `${i++}.` : '-';
-      const t = inlineContent(li as Element).replace(/\s+/g, ' ').trim();
+      const t = inlineContent(li as Element)
+        .replace(/\s+/g, ' ')
+        .trim();
       out.push(pad + marker + ' ' + t);
       for (const c of Array.from(li.children)) {
         if (c.tagName === 'UL' || c.tagName === 'OL') list(c as Element, indent + 1);
@@ -105,34 +148,76 @@ const INTERACTIVE = new Set(['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA']);
   function walkEl(el: Element): void {
     const tag = el.tagName;
     if (NOISE.has(tag)) return;
-    if (tag === 'P') { const t = inlineContent(el).replace(/\s+/g, ' ').trim(); if (t) block(t); return; }
+    if (tag === 'P') {
+      const t = inlineContent(el).replace(/\s+/g, ' ').trim();
+      if (t) block(t);
+      return;
+    }
     if (/^H[1-6]$/.test(tag)) {
       const t = inlineContent(el).replace(/\s+/g, ' ').trim();
       block('#'.repeat(+tag[1]) + (t ? ' ' + t : ''));
       return;
     }
-    if (tag === 'UL' || tag === 'OL') { list(el, 0); return; }
-    if (tag === 'BLOCKQUOTE') { const t = inlineContent(el).replace(/\s+/g, ' ').trim(); if (t) block('> ' + t); return; }
-    if (tag === 'PRE') { const t = (el.textContent || '').replace(/^\n+|\s+$/g, ''); block('```\n' + t + '\n```'); return; }
-    if (tag === 'HR') { block('---'); return; }
+    if (tag === 'UL' || tag === 'OL') {
+      list(el, 0);
+      return;
+    }
+    if (tag === 'BLOCKQUOTE') {
+      const t = inlineContent(el).replace(/\s+/g, ' ').trim();
+      if (t) block('> ' + t);
+      return;
+    }
+    if (tag === 'PRE') {
+      const t = (el.textContent || '').replace(/^\n+|\s+$/g, '');
+      block('```\n' + t + '\n```');
+      return;
+    }
+    if (tag === 'HR') {
+      block('---');
+      return;
+    }
     if (tag === 'TABLE') return; // 简化:跳过表格
-    if (tag === 'LI') { const t = inlineContent(el).replace(/\s+/g, ' ').trim(); if (t) block('- ' + t); return; }
-    if (tag === 'A' || tag === 'IMG' || tag === 'B' || tag === 'STRONG' || tag === 'EM' || tag === 'I' || tag === 'CODE' || INTERACTIVE.has(tag)) {
+    if (tag === 'LI') {
+      const t = inlineContent(el).replace(/\s+/g, ' ').trim();
+      if (t) block('- ' + t);
+      return;
+    }
+    if (
+      tag === 'A' ||
+      tag === 'IMG' ||
+      tag === 'B' ||
+      tag === 'STRONG' ||
+      tag === 'EM' ||
+      tag === 'I' ||
+      tag === 'CODE' ||
+      INTERACTIVE.has(tag)
+    ) {
       inline(inlineSeg(el, 0));
       return;
     }
     // 透明容器(div/section/article/main/span 等):下钻
     for (const n of Array.from(el.childNodes)) {
-      if (n.nodeType === 3) { const t = (n.nodeValue || '').replace(/\s+/g, ' ').trim(); if (t) inline(t); continue; }
+      if (n.nodeType === 3) {
+        const t = (n.nodeValue || '').replace(/\s+/g, ' ').trim();
+        if (t) inline(t);
+        continue;
+      }
       if (n.nodeType === 1) walkEl(n as Element);
     }
   }
 
   for (const n of Array.from(el.childNodes)) {
-    if (n.nodeType === 3) { const t = (n.nodeValue || '').replace(/\s+/g, ' ').trim(); if (t) inline(t); continue; }
+    if (n.nodeType === 3) {
+      const t = (n.nodeValue || '').replace(/\s+/g, ' ').trim();
+      if (t) inline(t);
+      continue;
+    }
     if (n.nodeType === 1) walkEl(n as Element);
   }
   flush();
-  const text = out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const text = out
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   return setResult({ ok: true, markdown: text, lines: text.split('\n') });
 })();

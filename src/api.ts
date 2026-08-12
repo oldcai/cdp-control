@@ -6,7 +6,16 @@
 import { writeFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import { pageWs, browserWs, send, evalJs, evaluate, resolve, list, sleep, Target } from './transport';
-import { inject, viewExpr, locateExpr, infoExpr, foldExpr, findExpr, articleExpr, readContentExpr } from './inject-loader';
+import {
+  inject,
+  viewExpr,
+  locateExpr,
+  infoExpr,
+  foldExpr,
+  findExpr,
+  articleExpr,
+  readContentExpr,
+} from './inject-loader';
 import { parseKeySpec } from './keys';
 import { maybeSpawnDaemon, injectMonitor } from './monitor';
 import { matchFolds, hostOf, pathOf, loadFolds } from './folds';
@@ -24,7 +33,8 @@ import { mouseClickEvents } from './click-events';
  */
 async function invoke<T>(target: Target, expr: string, timeout?: number): Promise<T> {
   const r = await evaluateWithSelfHeal(target, expr, timeout);
-  if (r && typeof r === 'object' && (r as any).ok === false && !(r as any).refInvalid) throw new Error((r as any).err || '操作失败');
+  if (r && typeof r === 'object' && (r as any).ok === false && !(r as any).refInvalid)
+    throw new Error((r as any).err || '操作失败');
   return r as T;
 }
 
@@ -34,11 +44,16 @@ async function invoke<T>(target: Target, expr: string, timeout?: number): Promis
  * daemon(monitor)走 pageWs/send 不经此,天然豁免自愈(不会死循环拉起浏览器)。
  */
 async function connectTarget(target: Target): Promise<WebSocket> {
-  try { return await pageWs(target); }
-  catch (e) {
+  try {
+    return await pageWs(target);
+  } catch (e) {
     let revived = target;
-    try { await ensureBrowser(); } catch {}
-    try { revived = await resolve(target.url || ''); } catch {}
+    try {
+      await ensureBrowser();
+    } catch {}
+    try {
+      revived = await resolve(target.url || '');
+    } catch {}
     return await pageWs(revived);
   }
 }
@@ -46,7 +61,11 @@ async function connectTarget(target: Target): Promise<WebSocket> {
 /** 用 connectTarget 连上后执行 JS(替代 transport.evaluate,获得连接失败自愈)。 */
 async function evaluateWithSelfHeal(target: Target, expression: string, timeout?: number): Promise<any> {
   const ws = await connectTarget(target);
-  try { return await evalJs(ws, expression, timeout); } finally { ws.close(); }
+  try {
+    return await evalJs(ws, expression, timeout);
+  } finally {
+    ws.close();
+  }
 }
 
 /**
@@ -55,19 +74,27 @@ async function evaluateWithSelfHeal(target: Target, expression: string, timeout?
  */
 async function withPage<T>(target: Target, fn: (ws: WebSocket) => Promise<T>): Promise<T> {
   const ws = await connectTarget(target);
-  try { return await fn(ws); } finally { ws.close(); }
+  try {
+    return await fn(ws);
+  } finally {
+    ws.close();
+  }
 }
 
 /** 连接抽象:开浏览器级 ws → 执行回调 → finally 关闭。返回回调返回值。 */
 async function withBrowser<T>(fn: (ws: WebSocket) => Promise<T>): Promise<T> {
   const ws = await browserWs();
-  try { return await fn(ws); } finally { ws.close(); }
+  try {
+    return await fn(ws);
+  } finally {
+    ws.close();
+  }
 }
 
 /** 新开一个 tab,返回 targetId。ws 在 maybeSpawnDaemon() 之前已关闭。 */
 export async function open(url = 'about:blank'): Promise<string> {
   await ensureBrowser();
-  const { targetId } = await withBrowser(async (ws) => {
+  const { targetId } = await withBrowser(async ws => {
     const r = await send(ws, 'Target.createTarget', { url, newWindow: false });
     return { targetId: r.targetId };
   });
@@ -81,28 +108,34 @@ export async function open(url = 'about:blank'): Promise<string> {
 
 /** 关闭 target。 */
 export async function close(target: Target): Promise<void> {
-  await withBrowser(async (ws) => {
+  await withBrowser(async ws => {
     await send(ws, 'Target.closeTarget', { targetId: target.id });
   });
 }
 
 /** 把 target 拉到前台(焦点切到该 tab)。 */
 export async function activate(target: Target): Promise<void> {
-  await withBrowser(async (ws) => {
+  await withBrowser(async ws => {
     await send(ws, 'Target.activateTarget', { targetId: target.id });
   });
 }
 
 /** 导航 target 到 url。 */
 export async function navigate(target: Target, url: string): Promise<void> {
-  await withPage(target, async (ws) => {
+  await withPage(target, async ws => {
     await send(ws, 'Page.navigate', { url });
   });
 }
 
 export interface ViewOpts {
-  selector?: string; visibleOnly?: boolean; ref?: number; ancestor?: number;
-  scrollToLoad?: boolean; scrollPages?: number; scrollTo?: string; scrollWait?: number;
+  selector?: string;
+  visibleOnly?: boolean;
+  ref?: number;
+  ancestor?: number;
+  scrollToLoad?: boolean;
+  scrollPages?: number;
+  scrollTo?: string;
+  scrollWait?: number;
   maxLen?: number; // 文本截断阈值;缺省不截断
 }
 
@@ -114,7 +147,23 @@ export interface ViewOpts {
 export async function view(target: Target, opts: ViewOpts = {}): Promise<any> {
   const folds = matchFolds(hostOf(target.url), pathOf(target.url)).map(r => ({ selector: r.selector, note: r.note }));
   const ignore = loadLinkRules().map(r => r.pattern);
-  return invoke(target, viewExpr(opts.selector, opts.visibleOnly, opts.ref, opts.ancestor, opts.scrollToLoad, folds, opts.scrollPages, opts.scrollTo, opts.scrollWait, ignore.length ? ignore : undefined, opts.maxLen), 30000);
+  return invoke(
+    target,
+    viewExpr(
+      opts.selector,
+      opts.visibleOnly,
+      opts.ref,
+      opts.ancestor,
+      opts.scrollToLoad,
+      folds,
+      opts.scrollPages,
+      opts.scrollTo,
+      opts.scrollWait,
+      ignore.length ? ignore : undefined,
+      opts.maxLen,
+    ),
+    30000,
+  );
 }
 
 /** 一次性抓取页面:临时 open 新 tab 打开 url → 等页面加载(至少 interactive)→ view 建树 → 关闭 tab,
@@ -126,11 +175,20 @@ export async function fetchPage(url: string): Promise<string[]> {
   try {
     t = await resolve(tid);
     // 等页面渲染出实质内容(body 有非空文本),避免 SPA 懒加载首帧只有空 body 就抓;加载慢/超时按现状 view(拿空树,优雅降级)。
-    try { await waitForFn(t, `document.body && document.body.innerText.trim().length > 0`, { timeout: 20000, interval: 300 }); } catch {}
+    try {
+      await waitForFn(t, `document.body && document.body.innerText.trim().length > 0`, {
+        timeout: 20000,
+        interval: 300,
+      });
+    } catch {}
     const r = await view(t);
     return r.lines ?? [];
   } finally {
-    if (t) { try { await close(t); } catch {} }
+    if (t) {
+      try {
+        await close(t);
+      } catch {}
+    }
   }
 }
 
@@ -159,26 +217,42 @@ export async function article(target: Target, ref: number, ancestor?: number): P
  * Node sleep → read-content 重查容器(旧元素复号,展开重渲染替换的新元素追加)。容器以 selector 每次重查为锚,
  * 免疫 ref 漂移;article 保持纯读不动。折叠判定(要不要展开)仍由 recipe 按站点语义决定。
  */
-export interface ReadOpts { container: string; expand?: TargetArg; wait?: number }
+export interface ReadOpts {
+  container: string;
+  expand?: TargetArg;
+  wait?: number;
+}
 export async function read(target: Target, opts: ReadOpts): Promise<any> {
   if (opts.expand != null) {
     await click(target, opts.expand, { noFeedback: true });
     await sleep(opts.wait ?? 1000);
   }
-  const rc = await invoke<{ ok: boolean; ref: number | null; err?: string }>(target, readContentExpr({ container: opts.container }));
-  if (!rc?.ok || rc.ref == null) throw new Error(rc?.err || `read: 容器未建树/未命中: ${opts.container}(需先 view 建树)`);
+  const rc = await invoke<{ ok: boolean; ref: number | null; err?: string }>(
+    target,
+    readContentExpr({ container: opts.container }),
+  );
+  if (!rc?.ok || rc.ref == null)
+    throw new Error(rc?.err || `read: 容器未建树/未命中: ${opts.container}(需先 view 建树)`);
   return article(target, rc.ref);
 }
 
 export interface FoldOpts {
-  ref?: number; ancestor?: number; note?: string; list?: boolean;
+  ref?: number;
+  ancestor?: number;
+  note?: string;
+  list?: boolean;
 }
 
 /** find:按文本(--text)或 selector(--selector)找元素,登记 ref 返回(复用或追加,不重置)。
  * - text:整页穿透 shadow 搜"自身或后代文本含关键词"的元素;selector:document.querySelector(支持 `>>>` shadow 链)。
  * - ancestor:命中后向上爬 N 层到区域容器。all:收集全部命中而非首个。
  * - 返回 {ok, hits:[{ref, tag, text, line}]}(line 是该元素 formatView 的一行输出,含 [ref=N])。 */
-export interface FindOpts { text?: string; selector?: string; ancestor?: number; all?: boolean }
+export interface FindOpts {
+  text?: string;
+  selector?: string;
+  ancestor?: number;
+  all?: boolean;
+}
 export async function find(target: Target, opts: FindOpts = {}): Promise<any> {
   return invoke(target, findExpr(opts));
 }
@@ -199,16 +273,19 @@ export type { TargetArg } from './target-arg';
 // —— 操作后自动反馈(opts + tab diff)——
 
 /** 操作反馈配置。feedbackDelay:操作后等待毫秒(默认 1000,给异步/懒加载内容出现留时间);noFeedback:关闭反馈。 */
-export interface FeedbackOpts { feedbackDelay?: number; noFeedback?: boolean }
+export interface FeedbackOpts {
+  feedbackDelay?: number;
+  noFeedback?: boolean;
+}
 
 /** 反馈结构:内容/文本/白名单属性变化(注入侧)+ tab 变化(Node 侧 /json/list diff)。 */
 export interface FeedbackResult {
-  note?: string;                                    // 说明(如"页面已跳转,旧 ref 失效,以下是新页整页视图")
-  reloaded?: boolean;                               // 注入侧判定:本次是否整页重载(换 document)
-  blocks?: { lines: string[]; count: number }[];   // 去重折叠后的新增内容块(可空);重载时为整页视图单块
-  changes?: { before?: string; after: string }[];  // 文本变化(过滤前后相同),如 [{before:'63',after:'64'}]
+  note?: string; // 说明(如"页面已跳转,旧 ref 失效,以下是新页整页视图")
+  reloaded?: boolean; // 注入侧判定:本次是否整页重载(换 document)
+  blocks?: { lines: string[]; count: number }[]; // 去重折叠后的新增内容块(可空);重载时为整页视图单块
+  changes?: { before?: string; after: string }[]; // 文本变化(过滤前后相同),如 [{before:'63',after:'64'}]
   attrs?: { desc: string; attr: string; before: string | null; after: string | null }[]; // 白名单属性变化；class 两侧仅存移除/新增 token
-  attrsOverflow?: number;                          // 属性变化去重后超过 20 条的剩余数
+  attrsOverflow?: number; // 属性变化去重后超过 20 条的剩余数
   tabs?: { opened: Target[]; closed: Target[]; navigated?: { id: string; from: string; to: string }[] };
 }
 
@@ -216,7 +293,11 @@ export interface FeedbackResult {
  * 用反馈包裹一次动作:装 observer(注入) → 快照 tab → 执行动作 → 等 feedbackDelay → 收反馈(注入) → 再快照 tab。
  * 动作本身返回 {ok:true,...};这里把结果展开并附上 feedback(内容 + tab diff)。noFeedback 时不做任何等待/观察/diff,返回 feedback:null。
  */
-async function runWithFeedback<T>(target: Target, doAction: () => Promise<T>, opts: FeedbackOpts = {}): Promise<T & { feedback: FeedbackResult | null }> {
+async function runWithFeedback<T>(
+  target: Target,
+  doAction: () => Promise<T>,
+  opts: FeedbackOpts = {},
+): Promise<T & { feedback: FeedbackResult | null }> {
   if (opts.noFeedback) return { ...(await doAction()), feedback: null };
   await invoke(target, inject('feedback-start'));
   const before = await list();
@@ -254,12 +335,16 @@ async function runWithFeedback<T>(target: Target, doAction: () => Promise<T>, op
     return { ...result, feedback: { ...fb, tabs } };
   } catch (err) {
     // 动作抛错(如 ref 失效):也断开 observer,避免 __cdpFeedback 残留影响下次;再重抛原错误。
-    try { await invoke(target, inject('feedback-collect')); } catch {}
+    try {
+      await invoke(target, inject('feedback-collect'));
+    } catch {}
     throw err;
   }
 }
 
-export interface ClickOpts extends FeedbackOpts { dom?: boolean }
+export interface ClickOpts extends FeedbackOpts {
+  dom?: boolean;
+}
 
 interface ClickPrepared {
   ok: boolean;
@@ -274,23 +359,30 @@ interface ClickPrepared {
 
 /** 点击 target 页面上匹配 selector 或 ref 的元素。默认走 CDP 坐标输入;dom=true 显式走旧合成路径。 */
 export async function click(target: Target, arg: TargetArg, opts: ClickOpts = {}) {
-  return runWithFeedback(target, async () => {
-    const prepared = await invoke<ClickPrepared>(target, inject('click', {
-      ...normArg(arg),
-      dom: opts.dom || undefined,
-    }));
-    if (prepared.refInvalid || opts.dom) return prepared;
-    if (typeof prepared.x !== 'number' || typeof prepared.y !== 'number') {
-      throw new Error('点击坐标缺失');
-    }
-    const point = { x: prepared.x, y: prepared.y };
-    await withPage(target, async (ws) => {
-      for (const event of mouseClickEvents(point)) {
-        await send(ws, 'Input.dispatchMouseEvent', event);
+  return runWithFeedback(
+    target,
+    async () => {
+      const prepared = await invoke<ClickPrepared>(
+        target,
+        inject('click', {
+          ...normArg(arg),
+          dom: opts.dom || undefined,
+        }),
+      );
+      if (prepared.refInvalid || opts.dom) return prepared;
+      if (typeof prepared.x !== 'number' || typeof prepared.y !== 'number') {
+        throw new Error('点击坐标缺失');
       }
-    });
-    return prepared;
-  }, opts);
+      const point = { x: prepared.x, y: prepared.y };
+      await withPage(target, async ws => {
+        for (const event of mouseClickEvents(point)) {
+          await send(ws, 'Input.dispatchMouseEvent', event);
+        }
+      });
+      return prepared;
+    },
+    opts,
+  );
 }
 
 /** 向 target 页面输入框填值(按 selector 或 ref,派发 input/change;默认带操作后反馈)。 */
@@ -299,7 +391,12 @@ export async function fill(target: Target, arg: TargetArg, value: string, opts: 
 }
 
 // 共享轮询原语:反复 eval 一段 JS 布尔表达式直到真值或超时。desc 用于超时报错文案。
-export async function pollWait(target: Target, expression: string, desc: string, { timeout = 15000, interval = 300 } = {}): Promise<boolean> {
+export async function pollWait(
+  target: Target,
+  expression: string,
+  desc: string,
+  { timeout = 15000, interval = 300 } = {},
+): Promise<boolean> {
   const ws = await pageWs(target);
   const start = Date.now();
   try {
@@ -329,7 +426,7 @@ export async function waitForFn(target: Target, expression: string, opts?: any):
 
 /** 截图 target 页面到文件,返回文件路径。写文件在关闭 ws 之后做。 */
 export async function screenshot(target: Target, file?: string): Promise<string> {
-  const r = await withPage(target, async (ws) => {
+  const r = await withPage(target, async ws => {
     return await send(ws, 'Page.captureScreenshot', { format: 'png' });
   });
   if (!r.data) throw new Error('截图失败:无数据');
@@ -353,38 +450,89 @@ export async function getFocus(target: Target): Promise<any> {
  * ——光发 keyDown/keyUp 事件到 JS 层不触发原生滚动。 */
 export async function pressKey(target: Target, keySpec: string, opts: FeedbackOpts = {}): Promise<any> {
   const { key, code, kc, modifiers, commands } = parseKeySpec(keySpec);
-  return runWithFeedback(target, async () => {
-    await withPage(target, async (ws) => {
-      // keyDown 带 commands 触发原生滚动(仅滚动类键有 commands);keyUp 不需要重复传。
-      const down: any = { type: 'keyDown', key, code, windowsVirtualKeyCode: kc, nativeVirtualKeyCode: kc, modifiers };
-      if (commands) down.commands = commands;
-      await send(ws, 'Input.dispatchKeyEvent', down);
-      await send(ws, 'Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: kc, nativeVirtualKeyCode: kc, modifiers });
-    });
-    return { ok: true as const };
-  }, opts);
+  return runWithFeedback(
+    target,
+    async () => {
+      await withPage(target, async ws => {
+        // keyDown 带 commands 触发原生滚动(仅滚动类键有 commands);keyUp 不需要重复传。
+        const down: any = {
+          type: 'keyDown',
+          key,
+          code,
+          windowsVirtualKeyCode: kc,
+          nativeVirtualKeyCode: kc,
+          modifiers,
+        };
+        if (commands) down.commands = commands;
+        await send(ws, 'Input.dispatchKeyEvent', down);
+        await send(ws, 'Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key,
+          code,
+          windowsVirtualKeyCode: kc,
+          nativeVirtualKeyCode: kc,
+          modifiers,
+        });
+      });
+      return { ok: true as const };
+    },
+    opts,
+  );
 }
 
 /** 将鼠标移到 target 页面指定元素中心(按 selector 或 ref,触发 mouseover/mouseenter;默认带操作后反馈)。 */
 export async function hover(target: Target, arg: TargetArg, opts: FeedbackOpts = {}): Promise<any> {
-  return runWithFeedback(target, async () => {
-    const pos = await invoke<{ ok: boolean; refInvalid?: boolean; x: number; y: number }>(target, inject('hover', normArg(arg)));
-    if (pos?.refInvalid) return pos; // ref 失效:注入侧已自愈,不 dispatch 鼠标
-    if (!pos?.ok) throw new Error('未找到: ' + (typeof arg === 'string' ? arg : 'ref=' + arg.ref));
-    await withPage(target, async (ws) => {
-      await send(ws, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: pos.x, y: pos.y });
-    });
-    return { ok: true as const };
-  }, opts);
+  return runWithFeedback(
+    target,
+    async () => {
+      const pos = await invoke<{ ok: boolean; refInvalid?: boolean; x: number; y: number }>(
+        target,
+        inject('hover', normArg(arg)),
+      );
+      if (pos?.refInvalid) return pos; // ref 失效:注入侧已自愈,不 dispatch 鼠标
+      if (!pos?.ok) throw new Error('未找到: ' + (typeof arg === 'string' ? arg : 'ref=' + arg.ref));
+      await withPage(target, async ws => {
+        await send(ws, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: pos.x, y: pos.y });
+      });
+      return { ok: true as const };
+    },
+    opts,
+  );
 }
 
 // 核心 api 对象(不含 logs/ensure,入口 cdp.ts 组装补全)。
 // resolve/list 前置 ensureBrowser:覆盖所有 target 命令(经 needTarget→resolve)与 list,让"一切命令"自愈。
 const coreApi = {
-  list: async () => { await ensureBrowser(); return list(); },
-  resolve: async (match?: string) => { await ensureBrowser(); return resolve(match); },
-  open, close, activate, navigate, eval: evaluate,
-  view, locate, info, article, read, fold, find, fetchPage, click, fill, waitFor, waitForFn, screenshot, focus, getFocus, pressKey, hover,
+  list: async () => {
+    await ensureBrowser();
+    return list();
+  },
+  resolve: async (match?: string) => {
+    await ensureBrowser();
+    return resolve(match);
+  },
+  open,
+  close,
+  activate,
+  navigate,
+  eval: evaluate,
+  view,
+  locate,
+  info,
+  article,
+  read,
+  fold,
+  find,
+  fetchPage,
+  click,
+  fill,
+  waitFor,
+  waitForFn,
+  screenshot,
+  focus,
+  getFocus,
+  pressKey,
+  hover,
 };
 
 export { coreApi };

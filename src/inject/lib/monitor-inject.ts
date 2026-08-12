@@ -8,8 +8,17 @@ export function installMonitor(): void {
   (window as any).__cdpMon = true;
   const logs: any[] = ((window as any).__cdpLogs = (window as any).__cdpLogs || []);
   const CAP = 2000;
-  function push(e: any) { logs.push(e); if (logs.length > CAP) logs.splice(0, logs.length - CAP); }
-  function stack() { try { return new Error().stack; } catch { return ''; } }
+  function push(e: any) {
+    logs.push(e);
+    if (logs.length > CAP) logs.splice(0, logs.length - CAP);
+  }
+  function stack() {
+    try {
+      return new Error().stack;
+    } catch {
+      return '';
+    }
+  }
   const lv: Record<string, number> = { log: 1, info: 1, warn: 1, error: 1, debug: 1 };
   for (const k in lv) {
     const orig = (console as any)[k];
@@ -22,7 +31,17 @@ export function installMonitor(): void {
     })(k, orig);
   }
   window.addEventListener('error', function (ev) {
-    push({ ts: Date.now(), type: 'exception', level: 'error', message: ev.message || '', source: ev.filename || '', line: ev.lineno, col: ev.colno, reason: ev.error, stack: (ev.error && (ev.error as any).stack) || ev.message || '' });
+    push({
+      ts: Date.now(),
+      type: 'exception',
+      level: 'error',
+      message: ev.message || '',
+      source: ev.filename || '',
+      line: ev.lineno,
+      col: ev.colno,
+      reason: ev.error,
+      stack: (ev.error && (ev.error as any).stack) || ev.message || '',
+    });
   });
   window.addEventListener('unhandledrejection', function (ev) {
     const r = ev.reason;

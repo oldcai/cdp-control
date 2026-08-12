@@ -13,12 +13,16 @@ import type { FoldArgs } from './lib/arg';
 declare const __CDP_ARG__: FoldArgs;
 
 (() => {
-  if (__CDP_ARG__.clear) { clearTmpFolds(); return setResult({ ok: true, cleared: true }); }
+  if (__CDP_ARG__.clear) {
+    clearTmpFolds();
+    return setResult({ ok: true, cleared: true });
+  }
   if (__CDP_ARG__.list) return setResult({ ok: true, folds: listTmpFolds() });
   const base = refElement(__CDP_ARG__.ref!);
   if (!base) return setResult(notFoundResult({ ref: __CDP_ARG__.ref! } as OperableArg));
   const el = climbAncestors(base, __CDP_ARG__.ancestor || 0);
-  if (!el) return setResult({ ok: false, err: `ref=${__CDP_ARG__.ref} 向上爬 ${__CDP_ARG__.ancestor || 0} 层后无元素` });
+  if (!el)
+    return setResult({ ok: false, err: `ref=${__CDP_ARG__.ref} 向上爬 ${__CDP_ARG__.ancestor || 0} 层后无元素` });
   const selector = genSel(el);
   if (!selector) return setResult({ ok: false, err: '无法为该元素生成 selector(可能为文档根)' });
   const note = __CDP_ARG__.note || selector;

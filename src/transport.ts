@@ -7,7 +7,10 @@ export const HOST = process.env.CDP_HOST || '127.0.0.1';
 // 端口默认为 env CDP_PORT 或 9222;浏览器配置 browser.json 的 port 由 ensureBrowser 经 setPort 同步进来。
 export let PORT: string | number = process.env.CDP_PORT || 9222;
 export let BASE = `http://${HOST}:${PORT}`;
-export function setPort(p: string | number): void { PORT = p; BASE = `http://${HOST}:${p}`; }
+export function setPort(p: string | number): void {
+  PORT = p;
+  BASE = `http://${HOST}:${p}`;
+}
 
 export interface Target {
   id: string;
@@ -24,28 +27,55 @@ export async function getJson(path: string, timeoutMs = 5000): Promise<any> {
 }
 
 // 轮询等待的通用 sleep(CLI/daemon 多处复用)。
-export function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
+export function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
+}
 
 export function wsConnect(url: string, timeout = 8000): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     let ws: WebSocket;
-    try { ws = new WebSocket(url); }
-    catch (e: any) { return reject(new Error(`创建 WebSocket 失败: ${e.message}`)); }
-    const t = setTimeout(() => { try { ws.close(); } catch {} reject(new Error(`连接超时: ${url}`)); }, timeout);
-    ws.onopen = () => { clearTimeout(t); resolve(ws); };
-    ws.onerror = () => { clearTimeout(t); reject(new Error(`WebSocket 连接失败: ${url}`)); };
+    try {
+      ws = new WebSocket(url);
+    } catch (e: any) {
+      return reject(new Error(`创建 WebSocket 失败: ${e.message}`));
+    }
+    const t = setTimeout(() => {
+      try {
+        ws.close();
+      } catch {}
+      reject(new Error(`连接超时: ${url}`));
+    }, timeout);
+    ws.onopen = () => {
+      clearTimeout(t);
+      resolve(ws);
+    };
+    ws.onerror = () => {
+      clearTimeout(t);
+      reject(new Error(`WebSocket 连接失败: ${url}`));
+    };
   });
 }
 
 let seq = 0;
-const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; method: string }>();
+const pending = new Map<
+  number,
+  { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; method: string }
+>();
 
 export function attachDispatcher(ws: WebSocket, onEvent?: (method: string, params: any) => void): void {
   ws.onmessage = (ev: any) => {
     let msg: any;
-    try { msg = JSON.parse(ev.data); } catch { return; }
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
     if (msg.id === undefined) {
-      if (onEvent) { try { onEvent(msg.method, msg.params); } catch {} }
+      if (onEvent) {
+        try {
+          onEvent(msg.method, msg.params);
+        } catch {}
+      }
       return;
     }
     const p = pending.get(msg.id);
@@ -60,7 +90,10 @@ export function attachDispatcher(ws: WebSocket, onEvent?: (method: string, param
 export function send(ws: WebSocket, method: string, params: any = {}, timeout = 20000): Promise<any> {
   const id = ++seq;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`命令超时: ${method}`)); }, timeout);
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`命令超时: ${method}`));
+    }, timeout);
     pending.set(id, { resolve, reject, timer, method });
     ws.send(JSON.stringify({ id, method, params }));
   });
@@ -83,14 +116,14 @@ export function resolveTarget(list: Target[], match?: string): Target {
   }
   const exact = list.find(t => t.id === match);
   if (exact) return exact;
-  const subs = list.filter(t =>
-    (t.id || '').includes(match) ||
-    (t.url || '').includes(match) ||
-    (t.title || '').includes(match)
+  const subs = list.filter(
+    t => (t.id || '').includes(match) || (t.url || '').includes(match) || (t.title || '').includes(match),
   );
   const sub = subs.find(t => !/^devtools:\/\//.test(t.url || '')) || subs[0];
   if (sub) return sub;
-  throw new Error(`没有找到匹配 "${match}" 的 tab。可用: ${list.map(t => t.id.slice(0, 8) + ':' + (t.title || t.url).slice(0, 30)).join(' | ')}`);
+  throw new Error(
+    `没有找到匹配 "${match}" 的 tab。可用: ${list.map(t => t.id.slice(0, 8) + ':' + (t.title || t.url).slice(0, 30)).join(' | ')}`,
+  );
 }
 
 // ---- 页面级连接与执行 ----
@@ -110,9 +143,17 @@ export async function browserWs(): Promise<WebSocket> {
 }
 
 export async function evalJs(ws: WebSocket, expression: string, timeout = 20000): Promise<any> {
-  const r = await send(ws, 'Runtime.evaluate', {
-    expression, returnByValue: true, awaitPromise: true, userGesture: true,
-  }, timeout);
+  const r = await send(
+    ws,
+    'Runtime.evaluate',
+    {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+      userGesture: true,
+    },
+    timeout,
+  );
   if (r.exceptionDetails) {
     const desc = r.exceptionDetails.exception?.description || r.exceptionDetails.text;
     throw new Error(`页面执行出错: ${desc}`);
@@ -129,7 +170,9 @@ export async function evaluate(target: Target, expression: string, timeout?: num
   try {
     return await evalJs(ws, expression, timeout);
   } finally {
-    try { ws.close(); } catch {}
+    try {
+      ws.close();
+    } catch {}
   }
 }
 

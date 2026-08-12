@@ -25,7 +25,10 @@ interface RecipeRule {
   extract: (cdp: any, ctx: { target: any; opts: any }) => Promise<{ lines?: string[] } | null>;
 }
 
-interface RuleFile { file: string; rules: RecipeRule[] }
+interface RuleFile {
+  file: string;
+  rules: RecipeRule[];
+}
 
 // 用动态 import 加载 CJS recipe 文件(ESM 测试与 esbuild CJS bundle 都可用;.js 的 default 即 module.exports)。
 async function loadRules(dir: string, f: string): Promise<RecipeRule[] | null> {
@@ -33,9 +36,13 @@ async function loadRules(dir: string, f: string): Promise<RecipeRule[] | null> {
     const mod: any = await import(pathToFileURL(join(dir, f)).href);
     const arr = mod?.default ?? mod;
     if (!Array.isArray(arr)) return null;
-    const rules = arr.filter(r => r && (typeof r.scope === 'string' || Array.isArray(r.scope)) && typeof r.extract === 'function');
+    const rules = arr.filter(
+      r => r && (typeof r.scope === 'string' || Array.isArray(r.scope)) && typeof r.extract === 'function',
+    );
     return rules.length ? rules : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 /** 列出 rules/recipes/*.js(recipe 是作者代码,直接读 git 权威),读取每条规则(加载失败/无 rules 数组的跳过)。 */
@@ -52,7 +59,9 @@ async function listRuleFiles(): Promise<RuleFile[]> {
 }
 
 /** 通配符个数(越小越具体)。 */
-function wild(s: string): number { return (s.match(/\*/g) || []).length; }
+function wild(s: string): number {
+  return (s.match(/\*/g) || []).length;
+}
 
 /** 一条规则里,与 url 匹配且最具体的那个 scope;无匹配返回 null。scope 数组 → 取最具体匹配项。 */
 function bestScope(scope: string | string[], url: string): string | null {
@@ -77,8 +86,7 @@ export async function matchRecipe(url: string): Promise<{ rule: RecipeRule; file
     }
   }
   if (!hits.length) return null;
-  hits.sort((a, b) =>
-    (wild(a.scope) - wild(b.scope)) || (b.scope.length - a.scope.length) || (a.order - b.order));
+  hits.sort((a, b) => wild(a.scope) - wild(b.scope) || b.scope.length - a.scope.length || a.order - b.order);
   return { rule: hits[0].rule, file: hits[0].file };
 }
 

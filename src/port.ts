@@ -58,7 +58,9 @@ export async function resolveHostAddrs(host: string, lk: typeof lookup = lookup)
   try {
     const r = await lk(addrs[0], { all: true });
     return r.length ? r.map(a => a.address) : addrs;
-  } catch { return addrs; }
+  } catch {
+    return addrs;
+  }
 }
 
 async function allFree(port: number, addrs: string[]): Promise<boolean> {
@@ -99,26 +101,38 @@ export function addrUnusable(addr: string, code: string): boolean {
  * 或所有地址都在本机不可用——什么都没探明)。kill 的"诚实检查"用它——bind 探测(portFree)
  * 只回答"我们能不能绑",对非本机的 CDP_HOST 一律 EADDRNOTAVAIL,会把活着的远程端点误判成"空闲"。
  */
-export async function endpointAlive(port: number, host = '127.0.0.1', timeoutMs = 1000, lk: typeof lookup = lookup): Promise<boolean | null> {
-  let unknown = false, refused = false;
+export async function endpointAlive(
+  port: number,
+  host = '127.0.0.1',
+  timeoutMs = 1000,
+  lk: typeof lookup = lookup,
+): Promise<boolean | null> {
+  let unknown = false,
+    refused = false;
   for (const a of await resolveHostAddrs(host, lk)) {
     const r = await connectProbe(port, a, timeoutMs);
     if (r === true) return true;
-    if (r === false) { refused = true; continue; }
-    if (!addrUnusable(a, r)) unknown = true;   // 本机不可用的回环地址:跳过,不污染结论
+    if (r === false) {
+      refused = true;
+      continue;
+    }
+    if (!addrUnusable(a, r)) unknown = true; // 本机不可用的回环地址:跳过,不污染结论
   }
   if (unknown) return null;
-  return refused ? false : null;               // 一个地址都没探明 → 判断不了,别报"没人"
+  return refused ? false : null; // 一个地址都没探明 → 判断不了,别报"没人"
 }
 
 /** 单地址 connect 探测:`true`=连上,`false`=ECONNREFUSED(明确没人),其余返回错误码字符串。 */
 function connectProbe(port: number, host: string, timeoutMs: number): Promise<boolean | string> {
   return new Promise(resolve => {
     const s = connect({ port, host });
-    const done = (v: boolean | string) => { s.destroy(); resolve(v); };
+    const done = (v: boolean | string) => {
+      s.destroy();
+      resolve(v);
+    };
     s.setTimeout(timeoutMs, () => done('ETIMEDOUT'));
     s.once('connect', () => done(true));
-    s.once('error', (e: NodeJS.ErrnoException) => done(e?.code === 'ECONNREFUSED' ? false : (e?.code || 'UNKNOWN')));
+    s.once('error', (e: NodeJS.ErrnoException) => done(e?.code === 'ECONNREFUSED' ? false : e?.code || 'UNKNOWN'));
   });
 }
 
@@ -136,9 +150,11 @@ export async function findFreePort(start: number, span = 50, host = '127.0.0.1')
     if (r.code !== 'EADDRINUSE') blocked = r.code;
   }
   const range = `端口 ${start}-${start + span - 1}`;
-  throw new Error(blocked
-    ? `${range} 都无法绑定(host=${host},最后一个原因 ${blocked}),无法启动浏览器`
-    : `${range} 全被占用,无法启动浏览器`);
+  throw new Error(
+    blocked
+      ? `${range} 都无法绑定(host=${host},最后一个原因 ${blocked}),无法启动浏览器`
+      : `${range} 全被占用,无法启动浏览器`,
+  );
 }
 
 /** host → 数值地址集合。零依赖、不做 DNS,只归一化最常见的 `localhost`(它同时是两个回环地址)。 */
@@ -203,12 +219,23 @@ export function parseNetstatListeners(out: string, port: number, host = '127.0.0
  */
 export function parseLsofListeners(out: string, port: number, host = '127.0.0.1'): number[] {
   const pids: number[] = [];
-  let cur = 0, fam = '';
+  let cur = 0,
+    fam = '';
   for (const line of out.split(/\r?\n/)) {
     const k = line[0];
-    if (k === 'p') { cur = Number(line.slice(1).trim()) || 0; fam = ''; continue; }
-    if (k === 'f') { fam = ''; continue; }               // 新 fd:族信息重新收集,别串到下一条
-    if (k === 't') { fam = line.slice(1).trim(); continue; }
+    if (k === 'p') {
+      cur = Number(line.slice(1).trim()) || 0;
+      fam = '';
+      continue;
+    }
+    if (k === 'f') {
+      fam = '';
+      continue;
+    } // 新 fd:族信息重新收集,别串到下一条
+    if (k === 't') {
+      fam = line.slice(1).trim();
+      continue;
+    }
     if (k !== 'n' || !cur) continue;
     if (addrServes(line.slice(1).trim(), host, port, fam) && !pids.includes(cur)) pids.push(cur);
   }

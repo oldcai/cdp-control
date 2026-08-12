@@ -20,14 +20,27 @@ function stubDocument() {
     querySelector: (sel: string) => uniqueSel.get(sel) ?? null,
     querySelectorAll: (sel: string) => {
       const n = selCount.get(sel) ?? 0;
-      return { length: n, item: (i: number) => null, [Symbol.iterator]() { return [][Symbol.iterator](); } };
+      return {
+        length: n,
+        item: (i: number) => null,
+        [Symbol.iterator]() {
+          return [][Symbol.iterator]();
+        },
+      };
     },
   };
 }
-beforeEach(() => { uniqueSel.clear(); selCount.clear(); stubDocument(); });
+beforeEach(() => {
+  uniqueSel.clear();
+  selCount.clear();
+  stubDocument();
+});
 
 /** 注册某 sel 唯一命中 el(同时进 uniqueSel 和 selCount=1)。 */
-function only(sel: string, el: any) { uniqueSel.set(sel, el); selCount.set(sel, 1); }
+function only(sel: string, el: any) {
+  uniqueSel.set(sel, el);
+  selCount.set(sel, 1);
+}
 
 /** 构造假元素:含 parentElement/children/id/getAttribute/attributes/classList。 */
 function mk(
@@ -40,17 +53,25 @@ function mk(
   const entries = Object.entries(attrMap);
   const attributesObj: any = {
     length: entries.length,
-    item: (i: number) => entries[i] ? { name: entries[i][0], value: entries[i][1] } : null,
+    item: (i: number) => (entries[i] ? { name: entries[i][0], value: entries[i][1] } : null),
   };
   for (let i = 0; i < entries.length; i++) attributesObj[i] = { name: entries[i][0], value: entries[i][1] };
   const el: any = {
-    tagName: tag, nodeType: 1, id,
-    parentElement: parent, children: [] as any[],
+    tagName: tag,
+    nodeType: 1,
+    id,
+    parentElement: parent,
+    children: [] as any[],
     attributes: attributesObj,
     getAttribute: (n: string) => attrMap[n] ?? null,
     get classList() {
       const list = classList;
-      return { length: list.length, [Symbol.iterator]() { return list[Symbol.iterator](); } };
+      return {
+        length: list.length,
+        [Symbol.iterator]() {
+          return list[Symbol.iterator]();
+        },
+      };
     },
   };
   return el;
@@ -164,7 +185,9 @@ test('genSel: 锚点祖先下方链不精确命中 el → 继续向上,最终兜
   const root = mk('div', body, { id: 'root' });
   const mid = mk('div', root);
   const target = mk('span', mid);
-  body.children = [root]; root.children = [mid]; mid.children = [target];
+  body.children = [root];
+  root.children = [mid];
+  mid.children = [target];
   only('#root', root);
   // 覆盖 querySelector:#root 仍命中 root 自己,但组合 selector 命中 null(不精确)
   (globalThis as any).document.querySelector = (sel: string) => (sel === '#root' ? root : null);

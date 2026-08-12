@@ -9,7 +9,17 @@ import { leafText } from '../src/inject/lib/view-utils.ts';
 
 /** 构造 ViewNode 的便捷 helper:size 由 markText 前手动填,hasText 由 markText 重算。 */
 function mk(over: Partial<ViewNode>): ViewNode {
-  return { tag: 'div', isContent: false, text: '', inter: false, imgAlt: '', kids: [], size: 1, hasText: false, ...over };
+  return {
+    tag: 'div',
+    isContent: false,
+    text: '',
+    inter: false,
+    imgAlt: '',
+    kids: [],
+    size: 1,
+    hasText: false,
+    ...over,
+  };
 }
 
 test('formatView: 纯包装节点折叠(productive.length===1 时递归,输出不含中间标签)', () => {
@@ -41,12 +51,7 @@ test('formatView: 两个以上非内联 productive 后代各自成行', () => {
   const root = mk({ tag: 'div', isContent: false, size: 4, kids: [sec] });
   markText(root);
   // section 作为分支标签单独一行,两个长后代各自缩进成行
-  assert.deepEqual(formatView(root), [
-    'div',
-    '  section',
-    '    p "' + long1 + '"',
-    '    h2 "' + long2 + '"',
-  ]);
+  assert.deepEqual(formatView(root), ['div', '  section', '    p "' + long1 + '"', '    h2 "' + long2 + '"']);
 });
 
 test('formatView: span 单文本行(!hasChildText && span && text → "text")', () => {
@@ -82,7 +87,11 @@ test('formatView: 自身直接文本 + 文本子节点并存时,ownText 不丢(�
   const root = mk({ tag: 'div', isContent: false, size: 3, kids: [p] });
   markText(root);
   // p 的 ownText 必须出现,不能只显示子 span(否则段落前半截整段丢失)
-  assert.deepEqual(formatView(root), ['div', '  "肠子才是动物进化路中最先出现的大脑，"', '  p "你的大脑其实已经在腹腔了。"']);
+  assert.deepEqual(formatView(root), [
+    'div',
+    '  "肠子才是动物进化路中最先出现的大脑，"',
+    '  p "你的大脑其实已经在腹腔了。"',
+  ]);
 });
 
 test('markText: 自身文本或后代文本都置 hasText=true', () => {
@@ -128,8 +137,25 @@ test('formatView: view=true 的带 ref 节点标 [ref=i·屏],无 view 只标 [r
 });
 
 test('formatView: 语义状态跟在 ref/·屏 后且无状态时零额外输出', () => {
-  const pressed = mk({ tag: 'button', isContent: true, text: '赞', inter: true, size: 1, ref: 5, view: true, state: ['pressed'] });
-  const expanded = mk({ tag: 'button', isContent: true, text: '展开', inter: true, size: 1, ref: 9, state: ['expanded'] });
+  const pressed = mk({
+    tag: 'button',
+    isContent: true,
+    text: '赞',
+    inter: true,
+    size: 1,
+    ref: 5,
+    view: true,
+    state: ['pressed'],
+  });
+  const expanded = mk({
+    tag: 'button',
+    isContent: true,
+    text: '展开',
+    inter: true,
+    size: 1,
+    ref: 9,
+    state: ['expanded'],
+  });
   const disabled = mk({ tag: 'button', isContent: true, text: '', inter: true, size: 1, ref: 3, state: ['disabled'] });
   const plain = mk({ tag: 'button', isContent: true, text: '取消', inter: true, size: 1, ref: 10 });
   const root = mk({ tag: 'div', isContent: false, size: 5, kids: [pressed, expanded, disabled, plain] });
@@ -145,12 +171,22 @@ test('formatView: 语义状态跟在 ref/·屏 后且无状态时零额外输出
 
 test('formatView: checkbox/radio 的 checked 并入 inputAttr,不在 ref 内重复', () => {
   const checkbox = mk({
-    tag: 'input', isContent: true, inter: true, size: 1, ref: 7,
-    inputInfo: { type: 'checkbox' }, state: ['checked', 'disabled'],
+    tag: 'input',
+    isContent: true,
+    inter: true,
+    size: 1,
+    ref: 7,
+    inputInfo: { type: 'checkbox' },
+    state: ['checked', 'disabled'],
   });
   const radio = mk({
-    tag: 'input', isContent: true, inter: true, size: 1, ref: 8,
-    inputInfo: { type: 'radio' }, state: ['checked=mixed'],
+    tag: 'input',
+    isContent: true,
+    inter: true,
+    size: 1,
+    ref: 8,
+    inputInfo: { type: 'radio' },
+    state: ['checked=mixed'],
   });
   const root = mk({ tag: 'div', isContent: false, size: 3, kids: [checkbox, radio] });
   markText(root);
@@ -188,7 +224,14 @@ test('formatView: leafValue 与首个子文本相同时去重(不输出 "X X")',
 });
 
 test('formatView: leafValue 与 span 文本行也带 ref 标注', () => {
-  const item = mk({ tag: 'li', isContent: true, leafValue: '点赞', size: 2, ref: 5, kids: [mk({ tag: 'span', isContent: true, text: '22.9万', size: 1 })] });
+  const item = mk({
+    tag: 'li',
+    isContent: true,
+    leafValue: '点赞',
+    size: 2,
+    ref: 5,
+    kids: [mk({ tag: 'span', isContent: true, text: '22.9万', size: 1 })],
+  });
   const root = mk({ tag: 'div', isContent: false, size: 3, kids: [item] });
   markText(root);
   assert.deepEqual(formatView(root), ['div', '  "点赞 22.9万" [ref=5]']);
@@ -231,7 +274,16 @@ test('formatView: 空壳 shadow host(带 ref)输出占位行,不展开其 shadow
   // 首屏 shadowRoot 还是空壳。旧逻辑下 host 不登记 ref + productive 过滤后整块消失。
   // 修法:带 ref 的 shadow host 在整页 view 里输出占位行,agent 据此用 view <ref> 展开。
   const shadowKid = mk({ tag: 'div', isContent: true, text: 'shadow 内部不应出现', size: 1 });
-  const comments = mk({ tag: 'bili-comments', isContent: true, text: '', inter: false, shadow: true, ref: 9, size: 2, kids: [shadowKid] });
+  const comments = mk({
+    tag: 'bili-comments',
+    isContent: true,
+    text: '',
+    inter: false,
+    shadow: true,
+    ref: 9,
+    size: 2,
+    kids: [shadowKid],
+  });
   const root = mk({ tag: 'body', isContent: false, size: 3, kids: [comments] });
   markText(root);
   // 只输出占位行 bili-comments[shadow] [ref=9],其下的 shadow 内容不展开
@@ -241,7 +293,16 @@ test('formatView: 空壳 shadow host(带 ref)输出占位行,不展开其 shadow
 test('formatView: 有 light 文本的 shadow host 也只占位(整页 view 不深入 shadow)', () => {
   // 即便 host 有 light 文本或 shadow 子树有内容,整页 view 仍只占位——深入用 view <ref>。
   const inner = mk({ tag: 'span', isContent: true, text: '评论条目', size: 1 });
-  const host = mk({ tag: 'x-list', isContent: true, text: '评论区', inter: false, shadow: true, ref: 4, size: 2, kids: [inner] });
+  const host = mk({
+    tag: 'x-list',
+    isContent: true,
+    text: '评论区',
+    inter: false,
+    shadow: true,
+    ref: 4,
+    size: 2,
+    kids: [inner],
+  });
   const root = mk({ tag: 'div', isContent: false, size: 3, kids: [host] });
   markText(root);
   assert.deepEqual(formatView(root), ['div', '  x-list[shadow] [ref=4]']);
@@ -271,9 +332,9 @@ test('formatView: fold 节点被多层纯包装容器包裹仍输出 ▸ 占位(
   // 被 productive filter 滤掉,walk 永远到不了 fold 节点 → 顶栏整块消失、无 ▸ 占位。
   // 此测试锁定:fold 节点哪怕被多层 isContent=false 的纯包装 div 包裹,也要输出 ▸。
   const foldNode = mk({ tag: 'header', isContent: true, text: '', ref: 1, fold: '知乎顶栏', size: 1, kids: [] });
-  const wrap3 = mk({ tag: 'div', isContent: false, size: 2, kids: [foldNode] });   // 模拟 div.css-s8xum0
-  const wrap2 = mk({ tag: 'div', isContent: false, size: 3, kids: [wrap3] });       // 模拟 div
-  const wrap1 = mk({ tag: 'div', isContent: false, size: 4, kids: [wrap2] });       // 模拟 div#root
+  const wrap3 = mk({ tag: 'div', isContent: false, size: 2, kids: [foldNode] }); // 模拟 div.css-s8xum0
+  const wrap2 = mk({ tag: 'div', isContent: false, size: 3, kids: [wrap3] }); // 模拟 div
+  const wrap1 = mk({ tag: 'div', isContent: false, size: 4, kids: [wrap2] }); // 模拟 div#root
   const root = mk({ tag: 'body', isContent: false, size: 5, kids: [wrap1] });
   markText(root);
   // 期望:多层包装被折叠掉,只剩 ▸ 占位行(包装 div 不输出,因为 productive.length===1 递归 walk)
@@ -303,7 +364,16 @@ test('leafText: fold 节点返回其备注(让包装它的容器不被 isTrivial
 });
 
 test('formatView: 折叠节点带 foldSize 输出 ▸ 备注 (N)', () => {
-  const folded = mk({ tag: 'header', isContent: true, text: '', ref: 1, fold: '顶栏', foldSize: 23, size: 1, kids: [] });
+  const folded = mk({
+    tag: 'header',
+    isContent: true,
+    text: '',
+    ref: 1,
+    fold: '顶栏',
+    foldSize: 23,
+    size: 1,
+    kids: [],
+  });
   const root = mk({ tag: 'body', isContent: false, size: 2, kids: [folded] });
   markText(root);
   assert.deepEqual(formatView(root), ['body', '  ▸ [ref=1] 顶栏 (23)']);

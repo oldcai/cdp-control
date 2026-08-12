@@ -9,7 +9,10 @@ export function inlineLen(n: { text?: string; imgAlt?: string; leafValue?: strin
   if (n.imgAlt) return 2;
   if (n.leafValue) return n.leafValue.length + firstTxt(n.kids ?? []).length;
   let sum = 0;
-  for (const k of n.kids ?? []) { sum += inlineLen(k); if (sum > 24) return sum; }
+  for (const k of n.kids ?? []) {
+    sum += inlineLen(k);
+    if (sum > 24) return sum;
+  }
   return sum;
 }
 
@@ -26,7 +29,10 @@ export function inlineable(n: { text?: string; imgAlt?: string; leafValue?: stri
 export function leafText(n: { text?: string; imgAlt?: string; fold?: string; kids?: any[] }): string {
   if (n.text) return n.text;
   if (n.fold) return n.fold;
-  for (const k of n.kids ?? []) { const t = leafText(k); if (t) return t; }
+  for (const k of n.kids ?? []) {
+    const t = leafText(k);
+    if (t) return t;
+  }
   return '';
 }
 
@@ -55,8 +61,7 @@ export const cut = (text: string, maxLen?: number): string =>
 /** 纯计数文本(如 "3"、"1.2万"、"548"):交互元素直接文本只剩计数、不带语义。
  * 此时需借 aria/title 补语义(见 view-core 的纯计数合并),否则 agent 只见裸数字,
  * 把收藏数/浏览数误当评论数(知乎收藏按钮直接文本即纯计数、语义在 aria-label="收藏")。 */
-export const isPureCount = (text: string): boolean =>
-  /^[\d,，．.]+(?:万|亿|千|[kKmM])?$/.test(text.trim());
+export const isPureCount = (text: string): boolean => /^[\d,，．.]+(?:万|亿|千|[kKmM])?$/.test(text.trim());
 
 /** data-* 属性值是否像"语义锚点":按**值内容**识别,而非属性名白名单。
  * 不同站点把语义放进五花八门的 data-*(data-tooltip/data-testid/data-qa/data-role/...),白名单永远追不全;

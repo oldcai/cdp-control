@@ -4,7 +4,10 @@
  * buildView 折叠时与持久规则(Node 侧传入的 folds)合并按 selector 匹配。
  * 生命周期:与 __cdpRefs 一致,页面刷新(新 document)清空。
  */
-export interface FoldEntry { selector: string; note: string }
+export interface FoldEntry {
+  selector: string;
+  note: string;
+}
 
 /** 临时折叠数组(不存在则初始化)。 */
 export function tmpFolds(): FoldEntry[] {

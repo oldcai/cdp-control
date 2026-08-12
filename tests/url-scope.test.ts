@@ -9,16 +9,16 @@ import { globToRegExp, hostOf, pathOf, urlMatches } from '../src/url-scope.ts';
 
 test('globToRegExp: 通配 + 字面转义 + 两端锚定', () => {
   const star = globToRegExp('*.zhihu.com/search*');
-  assert.ok(star.test('a.zhihu.com/search'));          // * 匹配任意字符含 /
-  assert.ok(star.test('b.zhihu.com/search/q/123'));    // 中间 * 匹配多段
-  assert.ok(!star.test('zhihu.com/search'));           // 前导 * 需要子域段?—— 见下:开头 *. 需匹配完整段
-  assert.ok(!star.test('x.example.com/search'));       // 字面不匹配
-  assert.ok(!star.test('a.zhihu.com/other'));          // 尾部锚定
+  assert.ok(star.test('a.zhihu.com/search')); // * 匹配任意字符含 /
+  assert.ok(star.test('b.zhihu.com/search/q/123')); // 中间 * 匹配多段
+  assert.ok(!star.test('zhihu.com/search')); // 前导 * 需要子域段?—— 见下:开头 *. 需匹配完整段
+  assert.ok(!star.test('x.example.com/search')); // 字面不匹配
+  assert.ok(!star.test('a.zhihu.com/other')); // 尾部锚定
   // 字面特殊字符转义
   const esc = globToRegExp('zhida.zhihu.com/search*');
   assert.ok(esc.test('zhida.zhihu.com/search?x=1&y=2'));
   assert.ok(!esc.test('zhida.zhihu.com/other'));
-  assert.ok(!esc.test('zzhida.zhihu.com/search'));     // 前导锚定(开头精确)
+  assert.ok(!esc.test('zzhida.zhihu.com/search')); // 前导锚定(开头精确)
 });
 
 test('hostOf/pathOf: 提取 hostname/pathname;非法与 about:blank 返回空', () => {
@@ -35,6 +35,6 @@ test('urlMatches: 作用域 glob 匹配 hostname+pathname 拼接串;无 hostname
   assert.ok(!urlMatches('www.zhihu.com/question/*', 'https://www.zhihu.com/topic/1'));
   assert.ok(!urlMatches('www.zhihu.com/question/*', 'https://other.com/question/1'));
   assert.ok(urlMatches('*.zhihu.com/*', 'https://www.zhihu.com/x'));
-  assert.ok(urlMatches('zhihu.com/*', 'https://zhihu.com/a/b'));   // hostname 不含 www 时精确
+  assert.ok(urlMatches('zhihu.com/*', 'https://zhihu.com/a/b')); // hostname 不含 www 时精确
   assert.ok(!urlMatches('www.zhihu.com/question/*', 'about:blank')); // 无 hostname → 不命中
 });

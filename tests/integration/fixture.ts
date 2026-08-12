@@ -96,7 +96,7 @@ function listen(server: Server): Promise<number> {
 export function closeServer(server: Server): Promise<void> {
   if (!server.listening) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    server.close(error => error ? reject(error) : resolve());
+    server.close(error => (error ? reject(error) : resolve()));
     server.closeAllConnections?.();
   });
 }

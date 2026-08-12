@@ -14,8 +14,14 @@ test('diffTabs 无任何变化:全空,且不挂 navigated 字段', () => {
 });
 
 test('diffTabs 新开 tab 进 opened,关闭 tab 进 closed', () => {
-  const before = [{ id: 't1', url: 'https://a.com' }, { id: 't2', url: 'https://b.com' }];
-  const after = [{ id: 't1', url: 'https://a.com' }, { id: 't3', url: 'https://c.com' }];
+  const before = [
+    { id: 't1', url: 'https://a.com' },
+    { id: 't2', url: 'https://b.com' },
+  ];
+  const after = [
+    { id: 't1', url: 'https://a.com' },
+    { id: 't3', url: 'https://c.com' },
+  ];
   const d = diffTabs(before, after);
   assert.deepEqual(d.opened, [{ id: 't3', url: 'https://c.com' }]);
   assert.deepEqual(d.closed, [{ id: 't2', url: 'https://b.com' }]);
@@ -36,8 +42,8 @@ test('diffTabs 同 id 跳转进 navigated,且只在有跳转时挂字段', () =>
 test('diffTabs 跳转 + 新开混在一起都报,navigated 仍挂', () => {
   const before = [{ id: 't1', url: 'https://a.com/old' }];
   const after = [
-    { id: 't1', url: 'https://a.com/new' },   // 跳转
-    { id: 't2', url: 'https://b.com' },       // 新开
+    { id: 't1', url: 'https://a.com/new' }, // 跳转
+    { id: 't2', url: 'https://b.com' }, // 新开
   ];
   const d = diffTabs(before, after);
   assert.deepEqual(d.opened, [{ id: 't2', url: 'https://b.com' }]);

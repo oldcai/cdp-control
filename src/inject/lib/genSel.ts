@@ -20,14 +20,20 @@ function escAttr(s: string): string {
 
 /** 全文档内该 selector 是否唯一命中(运行时 document 可用)。 */
 function isUnique(sel: string): boolean {
-  try { return (document as any).querySelectorAll(sel).length === 1; }
-  catch { return false; }
+  try {
+    return (document as any).querySelectorAll(sel).length === 1;
+  } catch {
+    return false;
+  }
 }
 
 /** 全文档内该 selector 是否命中给定元素自己(精确,不漂到祖先)。 */
 function matchesEl(el: Element, sel: string): boolean {
-  try { return (document as any).querySelector(sel) === el; }
-  catch { return false; }
+  try {
+    return (document as any).querySelector(sel) === el;
+  } catch {
+    return false;
+  }
 }
 
 /**
