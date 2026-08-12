@@ -219,8 +219,17 @@ function samePids(left: number[], right: number[]): boolean {
 
 /** host → 数值地址集合；localhost 同时代表两种回环地址。 */
 function hostAddrs(host: string): string[] {
-  const normalized = host.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  const normalized = canonicalAddress(host);
   return normalized === 'localhost' ? ['127.0.0.1', '::1'] : [normalized];
+}
+
+/** 把 IPv6 合法等价写法压缩成一致文本，避免 socket 可连接但 listener 字符串无法归属。 */
+function canonicalAddress(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (!normalized.includes(':')) return normalized;
+  try {
+    return new URL(`http://[${normalized}]/`).hostname.replace(/^\[/, '').replace(/\]$/, '');
+  } catch { return normalized; }
 }
 
 function hostFamilies(host: string): string[] {
@@ -236,7 +245,7 @@ function hostFamilies(host: string): string[] {
 export function addressServes(addr: string, host: string, port: number, family?: string): boolean {
   const separator = addr.lastIndexOf(':');
   if (separator < 0 || addr.slice(separator + 1) !== String(port)) return false;
-  const address = addr.slice(0, separator).replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  const address = canonicalAddress(addr.slice(0, separator));
   if (hostAddrs(host).includes(address)) return true;
   const families = hostFamilies(host);
   if (address === '0.0.0.0') return families.includes('IPv4');
@@ -301,6 +310,6 @@ function ipv6WildcardMayServeIpv4(addr: string, host: string, port: number, fami
   if (!hostFamilies(host).includes('IPv4')) return false;
   const separator = addr.lastIndexOf(':');
   if (separator < 0 || addr.slice(separator + 1) !== String(port)) return false;
-  const address = addr.slice(0, separator).replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  const address = canonicalAddress(addr.slice(0, separator));
   return address === '::' || (address === '*' && family === 'IPv6');
 }

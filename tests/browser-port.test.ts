@@ -388,3 +388,8 @@ test('parseLsofListenersForHosts: DNS 主机解析出的数值地址可归属 li
   const out = ['p666', 'f7', 'tIPv4', 'n192.0.2.44:9222'].join('\n');
   assert.deepEqual(parseLsofListenersForHosts(out, 9222, ['192.0.2.44', '2001:db8::44']), [666]);
 });
+
+test('parseLsofListeners: IPv6 合法非压缩写法与 lsof 压缩地址按同一端点匹配', () => {
+  const out = ['p777', 'f7', 'tIPv6', 'n[::1]:9222'].join('\n');
+  assert.deepEqual(parseLsofListeners(out, 9222, '[0:0:0:0:0:0:0:1]'), [777]);
+});
