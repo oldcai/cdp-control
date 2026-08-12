@@ -104,7 +104,13 @@ cdp-control run "./scripts/你的脚本.js"
 
 ## Quick Reference
 
-所有命令可选 `--target <匹配>`(target id 或 url/title 子串;不传自动选第一个普通网页)。命令名统一 kebab-case。
+需要选取现有 tab 的命令可选 `--target <匹配>`(target id 或 url/title 子串;不传自动选第一个普通网页):
+
+| 共用参数 | 适用子命令 |
+|---|---|
+| `--target <匹配>` | `navigate` / `eval` / `view` / `find` / `click` / `fill` / `focus` / `get-focus` / `info` / `article` / `press-key` / `hover` / `screenshot` / `logs` |
+
+`close`/`activate` 的 target 是位置参数;list/open/kill/fetch/run 不支持 `--target`。命令名统一 kebab-case。
 
 | 子命令 | 作用 |
 |---|---|

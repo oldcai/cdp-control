@@ -13,11 +13,24 @@
 ```bash
 npm install      # 首次:Biome/esbuild/typescript/@types/node/commander(运行时仅 commander)
 npm run lint     # Biome lint+格式校验、依赖边界检查、Node/集成 harness 类型检查
+npm run docs:check      # 从 Commander 真实注册项单向校验 SKILL.md 的 CLI 命令/long flag
 npm run build    # tsc --noEmit + esbuild(编译 + 打包注入脚本)
 npm test         # node:test 跑 tests/*.test.ts(零运行时依赖)
 npm run test:pack        # npm pack → 精确白名单 → 临时安装 → 真跑已安装 CLI
 npm run publish:dry-run  # 隔离 stage 翻 private 后只做 npm publish --dry-run,绝不发布
 ```
+
+### 本地提交门禁
+
+干净 clone 在 `npm install` 后执行一步安装:
+
+```bash
+npm run hooks:install
+```
+
+此命令只为**当前仓库**设置 `core.hooksPath=.githooks`,不改全局 Git 配置,也不挂到 `prepare`/`npm install` 自动执行。之后普通 `git commit` 会由 `.githooks/pre-commit` 依次运行快速档 `npm run typecheck` + `npm test`;紧急逃生使用 Git 原生 `git commit --no-verify`。
+
+hook 是 LF 的 `#!/bin/sh` POSIX 脚本,索引权限为 `100755`;`.gitattributes` 锁定 LF,兼容 macOS/Linux 及 Git for Windows 自带的 sh。安装器还会回读 local 配置并在 POSIX 工作树补 executable bit。
 
 实时规则目录 = `<CDP_HOME>/rules`(默认 `~/.cdp-control/rules`):本机默认路径是**符号链接指向 `rules/`**(用户规则=根本规则,运行时读写直接落 git 工作树的 rules,**无覆盖问题**);干净环境是真目录,`rules-store.ts` seed-once 缺文件时从 `rules/` 拷默认。**build 不清不覆盖**(修 clobber)。
 
@@ -201,6 +214,14 @@ Node 侧统一 `invoke(target, expr)` 执行注入脚本并解包:成功返回�
 - `skills/cdp-control/SKILL.md`:面向 **agent**(极薄),只教怎么调 `cdp-control`,不含构建/源码结构。`~/.claude/skills/cdp-control` 符号链接指向它。
 - `CLAUDE.md`(本文件):面向 **开发者**,含构建、源码结构、注入契约、测试。
 - `docs/superpowers/specs/`:设计文档。
+
+### CLI 文档防漂
+
+`npm run docs:check` 不维护第二份命令清单:它用现有 esbuild 从**当前** `src/cdp.ts` 生成隔离的临时 bundle,externalize `commander`,在不执行 `parseAsync`/action 的子进程里直接读取 Commander 的 `program.commands`、每个 command 的 `options[].long` 及 `required/optional` 值形态。临时进程固定 `CDP_NO_AUTOSTART=1`、隔离 `HOME`/`CDP_HOME` 并使用高位端口;结束删除项目 `tmp/` 下的工作目录。
+
+校验严格单向——只要求 SKILL 已声明的 CLI 项真实存在,不要求文档穷举 Commander。受检范围是 Quick Reference 命令/共用参数表、命令参数表、标题明确列出适用命令的共享 option 段、bash/sh fence 中以 `cdp-control` 或文档别名 `cdp` 开头的调用、命令形态 inline code,以及非代码 fence 中出现的精确 long flag;有命令上下文时校验 flag 归属,显式写出值时同时校验是否带值。非 shell fence、`cdp.xxx()`/`window.__cdpProbe` 等脚本 API、fold/recipe 概念和 `--scroll-*` 通配说明不当成 CLI 声明。
+
+盲区:不验证 short flag、位置参数、默认值、描述/业务语义与 flag 组合约束;无命令上下文的散文 flag 只能验证其在某个真实命令存在;未分组 shell 示例中 flag 后的字面量也可能是位置参数,故该写法只校验存在性,值形态由参数/签名表负责。Commander 当前所有注册均为同步初始化;未来若改成 action 后动态注册,需同步扩展提取方式。CI 的 lint job 在静态检查后独立运行 `npm run docs:check`。
 
 
 ---
