@@ -8,6 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { spawn, spawnSync, execFile } from 'node:child_process';
 import { createServer, connect } from 'node:net';
+import { lookup } from 'node:dns/promises';
 import { promisify } from 'node:util';
 import { getJson, setPort, HOST, PORT, sleep } from './transport';
 import { maybeSpawnDaemon } from './monitor';
@@ -20,7 +21,9 @@ import {
   killListenerPids,
   lsofListenerArgs,
   parseNetstatListeners,
+  parseNetstatListenersForHosts,
   parseLsofListeners,
+  parseLsofListenersForHosts,
   waitForCdpReady,
   type PortState,
 } from './browser-port';
@@ -190,12 +193,13 @@ function bindState(port: number): Promise<PortState> {
 /** 只枚举真正服务 `HOST:port` 的 TCP LISTEN listener；命令失败保留真因并由门禁拒绝继续。 */
 async function listenerPids(port: number): Promise<number[]> {
   try {
+    const resolvedHosts = await listenerHosts();
     if (process.platform === 'win32') {
       const { stdout } = await execFileAsync('netstat', ['-ano'], { encoding: 'utf8' });
-      return parseNetstatListeners(stdout, port, HOST);
+      return resolvedHosts ? parseNetstatListenersForHosts(stdout, port, resolvedHosts) : parseNetstatListeners(stdout, port, HOST);
     }
     const { stdout } = await execFileAsync('lsof', lsofListenerArgs(port), { encoding: 'utf8' });
-    return parseLsofListeners(stdout, port, HOST);
+    return resolvedHosts ? parseLsofListenersForHosts(stdout, port, resolvedHosts) : parseLsofListeners(stdout, port, HOST);
   } catch (error) {
     const stdout = typeof error === 'object' && error !== null && 'stdout' in error && typeof error.stdout === 'string'
       ? error.stdout : '';
@@ -208,6 +212,16 @@ async function listenerPids(port: number): Promise<number[]> {
     const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : 'unknown';
     throw new Error(`枚举配置端口 ${HOST}:${port} 的监听进程失败(${code})${stderr ? `: ${stderr}` : ''}`, { cause: error });
   }
+}
+
+/** 数值 host/localhost 由纯解析器直接处理；普通主机名先解析为 netstat/lsof 会报告的数值地址。 */
+async function listenerHosts(): Promise<string[] | null> {
+  const normalized = HOST.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (normalized === 'localhost' || normalized.includes(':') || /^\d+(?:\.\d+){3}$/.test(normalized)) return null;
+  const addresses = await lookup(HOST, { all: true });
+  const hosts = [...new Set(addresses.map(entry => entry.address))];
+  if (!hosts.length) throw new Error(`DNS 未返回地址: ${HOST}`);
+  return hosts;
 }
 
 function killPid(pid: number): void {

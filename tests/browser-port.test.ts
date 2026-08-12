@@ -15,6 +15,7 @@ import {
   hasCdpWebSocket,
   killListenerPids,
   lsofListenerArgs,
+  parseLsofListenersForHosts,
   waitForCdpReady,
 } from '../src/browser-port.ts';
 
@@ -375,4 +376,9 @@ test('parseLsofListeners: IPv6 wildcard 双栈 listener 也能归属 IPv4 回环
 test('parseLsofListeners: 新 fd 清空地址族，无法归属的 wildcard 宁可不杀', () => {
   const out = ['p555', 'f7', 'tIPv6', 'n[::1]:9222', 'f8', 'n*:9222'].join('\n');
   assert.deepEqual(parseLsofListeners(out, 9222, '127.0.0.1'), []);
+});
+
+test('parseLsofListenersForHosts: DNS 主机解析出的数值地址可归属 listener', () => {
+  const out = ['p666', 'f7', 'tIPv4', 'n192.0.2.44:9222'].join('\n');
+  assert.deepEqual(parseLsofListenersForHosts(out, 9222, ['192.0.2.44', '2001:db8::44']), [666]);
 });

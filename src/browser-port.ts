@@ -274,6 +274,16 @@ export function parseLsofListeners(out: string, port: number, host = '127.0.0.1'
   return pids.length ? pids : dualStackFallbackPids;
 }
 
+/** 对 DNS 解析出的全部数值地址取 listener PID 并集。 */
+export function parseLsofListenersForHosts(out: string, port: number, hosts: string[]): number[] {
+  return [...new Set(hosts.flatMap(host => parseLsofListeners(out, port, host)))];
+}
+
+/** 对 DNS 解析出的全部数值地址取 listener PID 并集。 */
+export function parseNetstatListenersForHosts(out: string, port: number, hosts: string[]): number[] {
+  return [...new Set(hosts.flatMap(host => parseNetstatListeners(out, port, host)))];
+}
+
 function addPid(pids: number[], pid: number): void {
   if (!pids.includes(pid)) pids.push(pid);
 }
