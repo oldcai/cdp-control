@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 2026-08-13
+
+- 增加零依赖、显式安装的 `core.hooksPath` pre-commit 快速门禁，以及从 Commander 真实注册项单向校验 agent skill CLI 命令/long flag 的 `docs:check` CI 门禁。
+
 ### 2026-08-12
 
 - 增加交付门禁:`npm pack` 内容精确白名单、临时 consumer 真安装并执行 CLI、三平台 CI pack 冒烟,以及隔离凭据且固定无效 registry 的 `npm publish --dry-run` 演练。
