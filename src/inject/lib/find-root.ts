@@ -116,7 +116,7 @@ export function findRoot(selector?: string): Element | null {
   const parts = selector.split('>>>').map(s => s.trim());
   if (parts.length === 1) return document.querySelector(parts[0]);
   // shadow 链:逐段穿透 shadowRoot
-  let node: any = document.querySelector(parts[0]);
+  let node: Element | null = document.querySelector(parts[0]);
   for (let i = 1; i < parts.length; i++) {
     if (!node || !node.shadowRoot) return null;
     node = node.shadowRoot.querySelector(parts[i]);
@@ -135,7 +135,7 @@ export function findRootAll(selector: string): Element[] {
   const parts = selector.split('>>>').map(s => s.trim());
   if (parts.length === 1) return Array.from(document.querySelectorAll(parts[0]));
   // shadow 链:前 n-1 段逐段穿透(每段取首个 host),末段 querySelectorAll 收全部
-  let node: any = document.querySelector(parts[0]);
+  let node: Element | null = document.querySelector(parts[0]);
   for (let i = 1; i < parts.length - 1; i++) {
     if (!node || !node.shadowRoot) return [];
     node = node.shadowRoot.querySelector(parts[i]);
@@ -170,7 +170,7 @@ export function climbAncestors(el: Element | null, ancestor = 0): Element | null
 /** 元素是否在 shadow DOM 内(根节点是 ShadowRoot)。 */
 export function inShadow(el: Element | null): boolean {
   if (!el) return false;
-  const root = (el as any).getRootNode ? (el as any).getRootNode() : null;
+  const root = el.getRootNode();
   return !!root && root instanceof ShadowRoot;
 }
 
@@ -186,8 +186,8 @@ export function actionSelector(el: Element): { shadow: boolean; selector: string
 
 /** 取元素所在 shadowRoot 的 host(若在 shadow 内,否则 null)。 */
 function shadowHost(el: Element): Element | null {
-  const root = (el as any).getRootNode && (el as any).getRootNode();
-  return root && root instanceof ShadowRoot ? (root as ShadowRoot).host : null;
+  const root = el.getRootNode();
+  return root instanceof ShadowRoot ? root.host : null;
 }
 
 /** 取元素最外层 host(沿 shadowRoot.host 上爬到落在 light DOM 的那个;元素不在 shadow 内返回 null)。 */

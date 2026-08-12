@@ -7,6 +7,7 @@
     "lib": ["ES2022", "DOM"],
     "types": ["node"],
     "strict": true,
+    "noImplicitReturns": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": true,
@@ -18,7 +19,5 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": [
-    "tests/integration/**/*.ts"
-  ]
+  "include": ["tests/integration/**/*.ts"]
 }

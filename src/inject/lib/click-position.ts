@@ -1,8 +1,19 @@
 /** click-position.ts — 点击中心坐标与逐层 shadow 命中链的纯逻辑。 */
 
-export interface RectLike { x: number; y: number; width: number; height: number }
-export interface ViewportLike { width: number; height: number }
-export interface Point { x: number; y: number }
+export interface RectLike {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+export interface ViewportLike {
+  width: number;
+  height: number;
+}
+export interface Point {
+  x: number;
+  y: number;
+}
 
 /** 零尺寸或中心落在 CSS 视口外时不可用。 */
 export function centerInViewport(rect: RectLike, viewport: ViewportLike): Point | null {

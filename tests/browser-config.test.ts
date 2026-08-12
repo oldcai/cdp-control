@@ -2,10 +2,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { parseBrowserConfig, defaultArgs, browserConfigPath, DEFAULT_PORT, DEFAULT_USER_DATA } from '../src/browser-config.ts';
+import {
+  parseBrowserConfig,
+  defaultArgs,
+  browserConfigPath,
+  DEFAULT_PORT,
+  DEFAULT_USER_DATA,
+} from '../src/browser-config.ts';
 
 test('parseBrowserConfig: 合法 JSON 解析(含 port/userData)', () => {
-  const c = parseBrowserConfig('{ "exe": "/x/msedge.exe", "kind": "edge", "args": ["--no-first-run"], "port": 9333, "userData": "/data" }');
+  const c = parseBrowserConfig(
+    '{ "exe": "/x/msedge.exe", "kind": "edge", "args": ["--no-first-run"], "port": 9333, "userData": "/data" }',
+  );
   assert.equal(c.exe, '/x/msedge.exe');
   assert.equal(c.kind, 'edge');
   assert.deepEqual(c.args, ['--no-first-run']);

@@ -39,12 +39,7 @@ export const DEFAULT_MAX_VISIT = 200000;
  * DFS(适配器抽象)收集所有"自身直接文本含 needle"的元素。
  * 不设硬深度——只靠 maxVisit + visited Set 控爆炸。命中即止(不深入其子)。
  */
-export function searchByText<T>(
-  root: T,
-  needle: string,
-  ad: SearchAdapters<T>,
-  opts: SearchOpts = {},
-): T[] {
+export function searchByText<T>(root: T, needle: string, ad: SearchAdapters<T>, opts: SearchOpts = {}): T[] {
   if (!needle) return [];
   const maxVisit = opts.maxVisit ?? DEFAULT_MAX_VISIT;
   const drop = opts.dropTags ?? new Set<string>();

@@ -15,7 +15,11 @@ import { readFileSync, existsSync } from 'node:fs';
 import { globToRegExp } from './url-scope.ts';
 import { linksLivePath } from './rules-store.ts';
 
-export interface LinkRule { id: number; pattern: string; note: string }
+export interface LinkRule {
+  id: number;
+  pattern: string;
+  note: string;
+}
 
 /** 规则文件路径:~/.cdp-control/rules/ignore-links.csv(rules-store seed-once 保证存在)。
  * 测试用 CDP_IGNORE_LINKS_FILE 覆盖到临时文件,避免写进真实 ~/.cdp-control/rules/ignore-links.csv。 */
@@ -28,7 +32,9 @@ export function hrefForMatch(href: string): string {
   try {
     const u = new URL(href);
     return u.hostname + u.pathname;
-  } catch { return href; }
+  } catch {
+    return href;
+  }
 }
 
 /** 单条规则是否命中某链接:pattern 为空 = 全命中;否则 glob 匹配 hrefForMatch(href)(globToRegExp 共享自 url-scope)。 */
@@ -60,6 +66,9 @@ export function parseLinkRules(text: string): LinkRule[] {
 export function loadLinkRules(): LinkRule[] {
   const p = linksPath();
   if (!existsSync(p)) return [];
-  try { return parseLinkRules(readFileSync(p, 'utf8')); }
-  catch { return []; }
+  try {
+    return parseLinkRules(readFileSync(p, 'utf8'));
+  } catch {
+    return [];
+  }
 }

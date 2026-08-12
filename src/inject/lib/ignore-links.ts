@@ -7,7 +7,10 @@
 export function linkIgnored(patterns: string[] | undefined, href: string): boolean {
   if (!patterns || !patterns.length || !href) return false;
   let target = href;
-  try { const u = new URL(href); target = u.hostname + u.pathname; } catch {}
+  try {
+    const u = new URL(href);
+    target = u.hostname + u.pathname;
+  } catch {}
   for (const pat of patterns) {
     if (!pat) return true;
     const esc = pat.replace(/[.+?^${}()|[\]\\]/g, '\\$&');

@@ -11,10 +11,7 @@ export interface CdpEnvironment {
   readonly [name: string]: string | undefined;
 }
 
-export function cdpHome(
-  environment: CdpEnvironment = process.env,
-  fallbackHome: string = homedir(),
-): string {
+export function cdpHome(environment: CdpEnvironment = process.env, fallbackHome: string = homedir()): string {
   return environment.CDP_HOME || join(fallbackHome, '.cdp-control');
 }
 

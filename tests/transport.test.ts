@@ -4,9 +4,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveTarget } from '../src/transport.ts';
+import { resolveTarget, type Target } from '../src/transport.ts';
 
-const list: any[] = [
+const list: Target[] = [
   { id: 'aaa111', url: 'devtools://devtools/bundled/inspector.html', title: 'DevTools' },
   { id: 'bbb222', url: 'https://example.com', title: '示例站' },
   { id: 'ccc333', url: 'about:blank', title: 'New Tab' },

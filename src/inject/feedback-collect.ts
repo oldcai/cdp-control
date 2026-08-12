@@ -5,4 +5,6 @@
 import { setResult } from './lib/result';
 import { collectFeedback } from './lib/feedback';
 
-(() => { return setResult({ ok: true, ...collectFeedback({ viewport: true }) }); })();
+(() => {
+  return setResult({ ok: true, ...collectFeedback({ viewport: true }) });
+})();

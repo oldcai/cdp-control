@@ -20,8 +20,9 @@ function withRulesDir<T>(fn: (dir: string) => T): T {
   const prevD = process.env.CDP_RULES_DEFAULT_DIR;
   process.env.CDP_RULES_DIR = dir;
   process.env.CDP_RULES_DEFAULT_DIR = DEFAULT_RULES;
-  try { return fn(dir); }
-  finally {
+  try {
+    return fn(dir);
+  } finally {
     if (prev === undefined) delete process.env.CDP_RULES_DIR;
     else process.env.CDP_RULES_DIR = prev;
     if (prevD === undefined) delete process.env.CDP_RULES_DEFAULT_DIR;
@@ -31,7 +32,7 @@ function withRulesDir<T>(fn: (dir: string) => T): T {
 }
 
 test('seed-once: 首跑缺文件从根 rules/ 拷默认', () => {
-  withRulesDir((dir) => {
+  withRulesDir(dir => {
     ensureRules();
     const fold = join(dir, 'fold.csv');
     assert.ok(existsSync(fold), 'fold.csv 被 seed');
@@ -44,7 +45,7 @@ test('seed-once: 首跑缺文件从根 rules/ 拷默认', () => {
 });
 
 test('seed-once: 已有文件不被覆盖(修 clobber)', () => {
-  withRulesDir((dir) => {
+  withRulesDir(dir => {
     const fold = join(dir, 'fold.csv');
     writeFileSync(fold, 'CUSTOM_RULE\n');
     ensureRules();
@@ -56,8 +57,5 @@ test('rulesDir: 默认跟随 CDP_HOME,CDP_RULES_DIR 保持最高优先级', () =
   const home = join('tmp', 'isolated-cdp-home');
   const explicitRules = join('tmp', 'explicit-rules');
   assert.equal(rulesDir({ CDP_HOME: home }), join(home, 'rules'));
-  assert.equal(
-    rulesDir({ CDP_HOME: home, CDP_RULES_DIR: explicitRules }),
-    explicitRules,
-  );
+  assert.equal(rulesDir({ CDP_HOME: home, CDP_RULES_DIR: explicitRules }), explicitRules);
 });

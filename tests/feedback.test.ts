@@ -40,9 +40,12 @@ test('foldTimestampRun: 纯数字计数(点赞数 1402→1403→1404)不折叠,�
 
 test('foldTimestampRun: 时间戳序列被真变化(纯数字)打断时,前段折叠、后段保留', () => {
   const cs = [
-    ch('01:55', '01:56'), ch('01:56', '01:57'), ch('01:57', '01:58'), // 3 条时间戳(折叠)
-    ch('1402', '1403'),                                                 // 真变化(打断)
-    ch('05:00', '05:01'), ch('05:01', '05:02'),                        // 仅 2 条(不折叠)
+    ch('01:55', '01:56'),
+    ch('01:56', '01:57'),
+    ch('01:57', '01:58'), // 3 条时间戳(折叠)
+    ch('1402', '1403'), // 真变化(打断)
+    ch('05:00', '05:01'),
+    ch('05:01', '05:02'), // 仅 2 条(不折叠)
   ];
   const out = foldTimestampRun(cs);
   // 折叠 1 + 真变化 1 + 2 条未折叠 = 4 条
@@ -76,10 +79,10 @@ test('foldTimestampRun: 时间戳边界格式(H:MM / HH:MM 都接受)', () => {
 });
 
 test('diffClassTokens: 只返回 class token 差集并保持两侧原顺序', () => {
-  assert.deepEqual(
-    diffClassTokens('Button Button--grey compact', 'Button Button--red compact active'),
-    { added: ['Button--red', 'active'], removed: ['Button--grey'] },
-  );
+  assert.deepEqual(diffClassTokens('Button Button--grey compact', 'Button Button--red compact active'), {
+    added: ['Button--red', 'active'],
+    removed: ['Button--grey'],
+  });
 });
 
 test('diffClassTokens: 仅重排/重复/空白变化时差集为空', () => {
@@ -90,7 +93,10 @@ test('diffClassTokens: 仅重排/重复/空白变化时差集为空', () => {
 
 test('limitFeedbackAttrs: 条目去重后最多 20 条并返回溢出数', () => {
   const attrs: FeedbackAttr[] = Array.from({ length: 21 }, (_, i) => ({
-    desc: `button[ref=${i}]`, attr: 'aria-pressed', before: 'false', after: 'true',
+    desc: `button[ref=${i}]`,
+    attr: 'aria-pressed',
+    before: 'false',
+    after: 'true',
   }));
   attrs.splice(3, 0, attrs[2]); // 完全重复的条目不占限额
   const out = limitFeedbackAttrs(attrs);
