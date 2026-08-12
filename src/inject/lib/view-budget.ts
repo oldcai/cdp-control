@@ -48,10 +48,7 @@ interface FoldPlan {
   saving: number;
 }
 
-interface PlannerMemo {
-  maxPlans: WeakMap<Candidate, FoldPlan>;
-  targetPlans: WeakMap<Candidate, Map<number, FoldPlan>>;
-}
+type PlanOrder = 'ascending' | 'descending';
 
 /** 把字符数压成折叠摘要用的紧凑数量级。 */
 export function formatApproxChars(chars: number): string {
@@ -210,13 +207,6 @@ function buildCandidates(
 
 const emptyPlan = (): FoldPlan => ({ candidates: [], saving: 0 });
 
-function mergePlans(plans: readonly FoldPlan[]): FoldPlan {
-  return {
-    candidates: plans.flatMap(plan => plan.candidates),
-    saving: plans.reduce((sum, plan) => sum + plan.saving, 0),
-  };
-}
-
 function betterPlan(target: number, left: FoldPlan | null, right: FoldPlan | null): FoldPlan | null {
   if (!left) return right;
   if (!right) return left;
@@ -233,68 +223,76 @@ function betterPlan(target: number, left: FoldPlan | null, right: FoldPlan | nul
   return leftOrder <= rightOrder ? left : right;
 }
 
-function maxPlan(candidate: Candidate, memo: PlannerMemo): FoldPlan {
-  const cached = memo.maxPlans.get(candidate);
+function maxPlan(candidate: Candidate, memo: WeakMap<Candidate, FoldPlan>): FoldPlan {
+  const cached = memo.get(candidate);
   if (cached) return cached;
-  const descendants = mergePlans(candidate.children.map(child => maxPlan(child, memo)));
+  const descendantParts = candidate.children.map(child => maxPlan(child, memo));
+  const descendants = {
+    candidates: descendantParts.flatMap(plan => plan.candidates),
+    saving: descendantParts.reduce((sum, plan) => sum + plan.saving, 0),
+  };
   const self = { candidates: [candidate], saving: candidate.saving };
   const result = descendants.saving >= self.saving ? descendants : self;
-  memo.maxPlans.set(candidate, result);
+  memo.set(candidate, result);
   return result;
 }
 
-function planCandidate(candidate: Candidate, target: number, memo: PlannerMemo): FoldPlan {
+function planCandidate(
+  candidate: Candidate,
+  target: number,
+  order: PlanOrder,
+  maxMemo: WeakMap<Candidate, FoldPlan>,
+): FoldPlan {
   if (target <= 0) return emptyPlan();
-  let byTarget = memo.targetPlans.get(candidate);
-  if (!byTarget) {
-    byTarget = new Map<number, FoldPlan>();
-    memo.targetPlans.set(candidate, byTarget);
-  }
-  const cached = byTarget.get(target);
-  if (cached) return cached;
-  const self = { candidates: [candidate], saving: candidate.saving };
-  const descendants = candidate.children.length ? planForest(candidate.children, target, memo) : null;
+  const descendantsCapacity = candidate.children.reduce((sum, child) => sum + child.capacity, 0);
   // 后代已能达标时必须保留更细的渐进展开点；只有后代容量不足才回退到粗祖先。
-  const result = descendants && descendants.saving >= target
-    ? descendants
-    : betterPlan(target, self, descendants) ?? emptyPlan();
-  byTarget.set(target, result);
-  return result;
+  if (descendantsCapacity >= target) return planForest(candidate.children, target, order, maxMemo);
+  const self = { candidates: [candidate], saving: candidate.saving };
+  const descendantParts = candidate.children.map(child => maxPlan(child, maxMemo));
+  const descendants = {
+    candidates: descendantParts.flatMap(plan => plan.candidates),
+    saving: descendantParts.reduce((sum, plan) => sum + plan.saving, 0),
+  };
+  return betterPlan(target, self, descendants) ?? emptyPlan();
 }
 
 /**
- * 从互不相交的子树中挑一组折叠：优先用多个更细的后代达到目标，
- * 只有后代的总压缩能力不够时才回退到较粗的祖先占位。
+ * 从互不相交的子树中贪心挑折叠：在容量升序/降序两种稳定顺序各跑一次，
+ * 每个候选只向下传递当前剩余 target 一次。这避免分支树向同一子树传播
+ * target / target-sibling / 更多子集差值所形成的指数级状态。
  */
-function planForest(candidates: readonly Candidate[], target: number, memo: PlannerMemo): FoldPlan {
+function planForest(
+  candidates: readonly Candidate[],
+  target: number,
+  order: PlanOrder,
+  maxMemo: WeakMap<Candidate, FoldPlan>,
+): FoldPlan {
   if (target <= 0 || candidates.length === 0) return emptyPlan();
   const available = [...candidates]
     .filter(candidate => candidate.capacity > 0)
-    .sort((left, right) => left.capacity - right.capacity || left.order - right.order);
+    .sort((left, right) => {
+      const capacityOrder = order === 'ascending'
+        ? left.capacity - right.capacity
+        : right.capacity - left.capacity;
+      return capacityOrder || left.order - right.order;
+    });
   if (!available.length) return emptyPlan();
 
-  let best: FoldPlan | null = null;
+  const parts: FoldPlan[] = [];
+  let remaining = target;
   for (const candidate of available) {
-    if (candidate.capacity < target) continue;
-    best = betterPlan(target, best, planCandidate(candidate, target, memo));
+    if (remaining <= 0) break;
+    const part = candidate.capacity < remaining
+      ? maxPlan(candidate, maxMemo)
+      : planCandidate(candidate, remaining, order, maxMemo);
+    if (!part.candidates.length) continue;
+    parts.push(part);
+    remaining -= part.saving;
   }
-
-  for (const ordered of [available, [...available].reverse()]) {
-    const parts: FoldPlan[] = [];
-    let remaining = target;
-    for (const candidate of ordered) {
-      if (remaining <= 0) break;
-      const part = candidate.capacity < remaining
-        ? maxPlan(candidate, memo)
-        : planCandidate(candidate, remaining, memo);
-      if (!part.candidates.length) continue;
-      parts.push(part);
-      remaining -= part.saving;
-    }
-    best = betterPlan(target, best, mergePlans(parts));
-  }
-
-  return best ?? emptyPlan();
+  return {
+    candidates: parts.flatMap(plan => plan.candidates),
+    saving: target - remaining,
+  };
 }
 
 function asResult(state: RenderState, budget: number, folds: ReadonlyMap<number, string>): BudgetRenderResult {
@@ -328,13 +326,12 @@ function finishBudget(
   let bestState: RenderState = baseline;
   let bestFolds = new Map(baselineFolds);
   let previousPlanKey = '';
-  const plannerMemo: PlannerMemo = {
-    maxPlans: new WeakMap<Candidate, FoldPlan>(),
-    targetPlans: new WeakMap<Candidate, Map<number, FoldPlan>>(),
-  };
+  const maxPlanMemo = new WeakMap<Candidate, FoldPlan>();
 
   for (let attempt = 0; attempt < 8; attempt++) {
-    const plan = planForest(collection.roots, target, plannerMemo);
+    const ascending = planForest(collection.roots, target, 'ascending', maxPlanMemo);
+    const descending = planForest(collection.roots, target, 'descending', maxPlanMemo);
+    const plan = betterPlan(target, ascending, descending) ?? emptyPlan();
     if (!plan.candidates.length) break;
     const planKey = plan.candidates.map(candidate => candidate.ref).sort((a, b) => a - b).join(',');
     if (planKey === previousPlanKey) {
