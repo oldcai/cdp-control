@@ -526,6 +526,23 @@ test('prepareFixedPort: 破坏性门禁的 DNS 地址集合变化时 fail closed
   assert.deepEqual(killed, []);
 });
 
+test('reclaimFixedPortListeners: 杀前复确认 PID 仍是当前 listener，已退出或换代则 fail closed 不杀', async () => {
+  const killed: number[] = [];
+  await assert.rejects(
+    () =>
+      reclaimFixedPortListeners(9222, [961, 962], {
+        listenerPids: async () => [961],
+        killPid: pid => {
+          killed.push(pid);
+        },
+        portState: async () => ({ state: 'busy' }),
+        sleep: async () => undefined,
+      }),
+    error => error instanceof FixedPortError && /监听进程 962 已不再归属/.test(error.message),
+  );
+  assert.deepEqual(killed, [961]);
+});
+
 test('reclaimFixedPortListeners: 每个 PID 前复核 DNS 地址集合，变化后不再 kill 后续 listener', async () => {
   const dnsChanged = new Error('DNS address set changed between PIDs fixture');
   const killed: number[] = [];
