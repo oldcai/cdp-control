@@ -58,9 +58,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every(key => Object.hasOwn(value, key));
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
 function isDaemonIdentity(value: unknown): value is DaemonIdentity {
   return (
     isRecord(value) &&
+    hasExactKeys(value, ['home', 'cdpHost', 'cdpPort']) &&
     typeof value.home === 'string' &&
     typeof value.cdpHost === 'string' &&
     typeof value.cdpPort === 'string'
@@ -68,20 +78,17 @@ function isDaemonIdentity(value: unknown): value is DaemonIdentity {
 }
 
 function isDaemonHealth(value: unknown): value is DaemonHealth {
-  return isRecord(value) && value.ok === true && typeof value.targets === 'number' && isDaemonIdentity(value.identity);
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['ok', 'identity', 'targets']) &&
+    value.ok === true &&
+    isNonNegativeInteger(value.targets) &&
+    isDaemonIdentity(value.identity)
+  );
 }
 
 function isLegacyDaemonHealth(value: Record<string, unknown>): boolean {
-  const keys = Object.keys(value);
-  return (
-    keys.length === 2 &&
-    Object.hasOwn(value, 'ok') &&
-    Object.hasOwn(value, 'targets') &&
-    value.ok === true &&
-    typeof value.targets === 'number' &&
-    Number.isInteger(value.targets) &&
-    value.targets >= 0
-  );
+  return hasExactKeys(value, ['ok', 'targets']) && value.ok === true && isNonNegativeInteger(value.targets);
 }
 
 export function sameDaemonIdentity(actual: DaemonIdentity, expected: DaemonIdentity): boolean {
