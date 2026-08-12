@@ -304,25 +304,20 @@ export async function planListenerCleanup(
   port: number,
   deps: Pick<FixedPortDependencies, 'assertAuthority' | 'assertAddressSet' | 'portState' | 'listenerPids'>,
 ): Promise<ListenerCleanupPlan> {
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   const initialState = await deps.portState(port);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (initialState.state === 'free') return { action: 'noProcess' };
   if (initialState.state === 'unknown') return { action: 'stillUp' };
 
   const firstPids = normalizePids(await deps.listenerPids(port));
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   const finalState = await deps.portState(port);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (finalState.state === 'free') return { action: 'noProcess' };
   if (finalState.state === 'unknown') return { action: 'stillUp' };
   const finalPids = normalizePids(await deps.listenerPids(port));
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (!firstPids.length || !samePids(firstPids, finalPids)) return { action: 'stillUp' };
   return { action: 'kill', pids: finalPids };
 }
@@ -338,8 +333,7 @@ export async function settleFixedPortLaunch(
 ): Promise<FixedPortAction> {
   try {
     await waitReady();
-    assertAuthority(port, deps);
-    await assertAddressSet(deps);
+    await assertFixedPortGuards(port, deps);
     return { action: 'launch', port };
   } catch (cause) {
     const recovered = await prepareFixedPort(port, deps);
@@ -357,13 +351,11 @@ export async function reclaimFixedPortListeners(
   const expectedPids = normalizePids(pids);
   const expectedPidSet = new Set(expectedPids);
   const guard = async (pid: number): Promise<void> => {
-    assertAuthority(port, deps);
-    await assertAddressSet(deps);
+    await assertFixedPortGuards(port, deps);
     const beforeAddressValidation = await listenerSnapshot(port, deps);
-    assertAuthority(port, deps);
     // 首次快照后再复核 DNS 集合，并以第二次 listener 枚举作为 kill 前最后一个 awaited 步骤。
     // 这样既不会消费陈旧地址授权，也避免 async guard 后旧 PID 被无关进程复用。
-    await assertAddressSet(deps);
+    await assertFixedPortGuards(port, deps);
     const currentPids = await listenerSnapshot(port, deps);
     assertAuthority(port, deps);
     if (
@@ -377,23 +369,19 @@ export async function reclaimFixedPortListeners(
     }
   };
   const killFailures = await killListenerPids(expectedPids, deps.killPid, guard);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
 
   const timeoutMs = deps.releaseTimeoutMs ?? 3000;
   const pollMs = deps.releasePollMs ?? 300;
   const attempts = Math.floor(timeoutMs / pollMs);
   for (let i = 0; i <= attempts; i++) {
-    assertAuthority(port, deps);
-    await assertAddressSet(deps);
+    await assertFixedPortGuards(port, deps);
     const release = await deps.portState(port);
-    assertAuthority(port, deps);
-    await assertAddressSet(deps);
+    await assertFixedPortGuards(port, deps);
     if (release.state !== 'busy') return { ...release, killFailures };
     if (i < attempts) {
       await deps.sleep(pollMs);
-      assertAuthority(port, deps);
-      await assertAddressSet(deps);
+      await assertFixedPortGuards(port, deps);
     }
   }
   return { state: 'busy', killFailures };
@@ -413,16 +401,13 @@ async function prepareFixedPortAttempt(
   restartCount: number,
   launchChecked: boolean,
 ): Promise<FixedPortAction> {
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   const initial = await deps.probe(port);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (initial.ready) return { action: 'reuse', browser: initial.browser };
 
   const state = await deps.portState(port);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (state.state === 'free') {
     if (!deps.launch) return { action: 'launch', port };
     if (launchChecked) {
@@ -438,23 +423,19 @@ async function prepareFixedPortAttempt(
   // 另一个并发调用可能刚 bind 端口、CDP 尚未就绪；先给有界宽限，再进入 listener 回收。
   if (deps.busyGraceProbe) {
     const graceProbe = await deps.busyGraceProbe(port);
-    assertAuthority(port, deps);
-    await assertAddressSet(deps);
+    await assertFixedPortGuards(port, deps);
     if (graceProbe.ready) return { action: 'reuse', browser: graceProbe.browser };
   }
 
   const observedPids = await listenerSnapshot(port, deps);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
 
   // 枚举 listener 后、破坏性操作前最后再确认一次，避免误杀并发期间刚就绪的健康 CDP。
   const finalProbe = await deps.probe(port);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (finalProbe.ready) return { action: 'reuse', browser: finalProbe.browser };
   const finalState = await deps.portState(port);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (finalState.state === 'free') {
     return recheckBeforeLaunch(port, deps, restartCount);
   }
@@ -465,29 +446,25 @@ async function prepareFixedPortAttempt(
 
   // 探活本身会花时间；复探之后重新取快照，快照变化说明端点身份可能已换，必须重启判断而非杀旧 PID。
   const currentPids = await listenerSnapshot(port, deps);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (!samePids(observedPids, currentPids)) {
     if (restartCount >= 3) throw new FixedPortError(`配置端口 ${port} 的监听进程持续变化，拒绝执行破坏性操作`);
     return prepareFixedPortAttempt(port, deps, restartCount + 1, launchChecked);
   }
   // 破坏性操作前最后复探；并发变健康就复用且绝不 kill。
   const destructiveProbe = await deps.probe(port);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (destructiveProbe.ready) return { action: 'reuse', browser: destructiveProbe.browser };
   // 探活可能耗时，必须在它之后再逐 PID 确认 listener 身份；变化时宁可重启状态机。
   const killPids = await listenerSnapshot(port, deps);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (!samePids(currentPids, killPids)) {
     if (restartCount >= 3) throw new FixedPortError(`配置端口 ${port} 的监听进程持续变化，拒绝执行破坏性操作`);
     return prepareFixedPortAttempt(port, deps, restartCount + 1, launchChecked);
   }
 
   const release = await reclaimFixedPortListeners(port, killPids, deps);
-  assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await assertFixedPortGuards(port, deps);
   if (release.state === 'free') {
     if (release.killFailures.length)
       throw new FixedPortError(
@@ -537,8 +514,14 @@ function assertAuthority(port: number, deps: Pick<FixedPortDependencies, 'assert
   deps.assertAuthority?.(port);
 }
 
-async function assertAddressSet(deps: Pick<FixedPortDependencies, 'assertAddressSet'>): Promise<void> {
+async function assertFixedPortGuards(
+  port: number,
+  deps: Pick<FixedPortDependencies, 'assertAuthority' | 'assertAddressSet'>,
+): Promise<void> {
+  assertAuthority(port, deps);
   await deps.assertAddressSet?.();
+  // 地址集合复核本身可异步；只有它返回后的配置快照仍权威，调用方才可消费上一门禁结果。
+  assertAuthority(port, deps);
 }
 
 /** host → 数值地址集合；localhost 同时代表两种回环地址。 */

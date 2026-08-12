@@ -376,6 +376,29 @@ test('settleFixedPortLaunch: waitReady 成功后地址身份变化必须 fail cl
   assert.equal(checks, 2, '失败恢复也必须沿用同一地址 guard，而不是换快照继续');
 });
 
+test('settleFixedPortLaunch: async 地址复核期间配置改口时不得返回 launch', async () => {
+  const authorityChanged = new Error('authority changed during settle address guard fixture');
+  let authoritative = true;
+
+  await assert.rejects(
+    () =>
+      settleFixedPortLaunch(24135, async () => undefined, {
+        assertAuthority: () => {
+          if (!authoritative) throw authorityChanged;
+        },
+        assertAddressSet: async () => {
+          authoritative = false;
+        },
+        probe: async () => ({ ready: false }),
+        portState: async () => ({ state: 'free' }),
+        listenerPids: async () => [],
+        killPid: () => undefined,
+        sleep: async () => undefined,
+      }),
+    error => error === authorityChanged,
+  );
+});
+
 test('waitForCdpReady: 早退宽限结束仍无健康 CDP 时保留真实退出原因', async () => {
   let now = 0;
   await assert.rejects(
@@ -478,7 +501,15 @@ test('planListenerCleanup: 异步枚举期间权威配置变化时立即中止',
       }),
     error => error === authorityChanged,
   );
-  assert.deepEqual(calls, ['authority:true', 'state', 'authority:true', 'listeners', 'authority:false']);
+  assert.deepEqual(calls, [
+    'authority:true',
+    'authority:true',
+    'state',
+    'authority:true',
+    'authority:true',
+    'listeners',
+    'authority:false',
+  ]);
 });
 
 test('reclaimFixedPortListeners: 权威配置已变化时在首个 kill 前 fail closed', async () => {
@@ -663,6 +694,31 @@ test('prepareFixedPort: 健康 CDP 直接复用，不查监听、不 kill', asyn
   const d = dependencies({ probes: [{ ready: true, browser: 'Chrome/1' }] });
   assert.deepEqual(await prepareFixedPort(24101, d), { action: 'reuse', browser: 'Chrome/1' });
   assert.deepEqual(d.calls, ['probe:24101']);
+});
+
+test('prepareFixedPort: async 地址复核期间配置改口时不得消费旧 probe 返回 reuse', async () => {
+  const authorityChanged = new Error('authority changed during probe address guard fixture');
+  let authoritative = true;
+  let addressChecks = 0;
+
+  await assert.rejects(
+    () =>
+      prepareFixedPort(24136, {
+        assertAuthority: () => {
+          if (!authoritative) throw authorityChanged;
+        },
+        assertAddressSet: async () => {
+          addressChecks += 1;
+          if (addressChecks === 2) authoritative = false;
+        },
+        probe: async () => ({ ready: true, browser: 'Chrome/stale-authority' }),
+        portState: async () => ({ state: 'free' }),
+        listenerPids: async () => [],
+        killPid: () => undefined,
+        sleep: async () => undefined,
+      }),
+    error => error === authorityChanged,
+  );
 });
 
 test('prepareFixedPort: 端口空闲就在同一个配置端口启动', async () => {
