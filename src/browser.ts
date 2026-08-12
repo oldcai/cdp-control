@@ -157,8 +157,8 @@ async function probeResolvedCdp(address: string, timeoutMs: number): Promise<Pro
 }
 
 /**
- * ready 探活：健康主连接仍只做一次 GET。主连接未就绪时再逐解析地址复核，
- * 防止 localhost/DNS 某一地址的健康 CDP 被后续多地址 listener 并集误杀。
+ * ready 探活：单一数值 host 健康时只做一次 GET。多地址 hostname 即使主请求成功
+ * 也逐解析地址复核并 pin，避免后续请求/daemon 重新命中非 CDP 地址。
  */
 async function probeReady(timeoutMs = 5000): Promise<ProbeResult> {
   const probe = await probeHostCdp({
