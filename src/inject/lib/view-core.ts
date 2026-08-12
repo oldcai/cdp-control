@@ -358,6 +358,8 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
     let childParent: number | null = parentRef;
     if ((n.wantRef || n.wantHidden) && n.el) {
       const ref = registerRef(n.el, parentRef);
+      // 预算折叠复用 registry 印发的同一稳定句柄；wantHidden 也登记但不打印。
+      n.budgetRef = ref;
       if (n.wantRef) n.ref = ref;
       childParent = ref;
     }
