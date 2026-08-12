@@ -3,22 +3,29 @@
  * 依赖 transport(连接原语)+ inject-loader(monitor/read 注入装配),不依赖 api → 无环。
  */
 import { spawn } from 'node:child_process';
-import { unlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { pageWs, send, listTargets, resolve, evaluate, sleep, PORT, Target } from './transport';
+import { pageWs, send, listTargets, resolve, evaluate, sleep, PORT, HOST, Target } from './transport';
 import { inject, readExpr } from './inject-loader';
-import { cdpNoAutostart } from './paths.ts';
+import { cdpHome, cdpLogsPort, cdpNoAutostart } from './paths.ts';
+import {
+  daemonHealthy as probeDaemonHealth,
+  daemonIdentity,
+  daemonPidFilePath,
+  ensureDaemonReady,
+  type DaemonIdentity,
+} from './monitor-health.ts';
+import { legacyDaemonPidFilePath, retireDaemonProcess } from './monitor-process';
+import { initializeBoundDaemon } from './monitor-startup.ts';
 
-export const LOGS_PORT = Number(process.env.CDP_LOGS_PORT) || 9333;
+export const LOGS_PORT = cdpLogsPort();
 
 export function pidFilePath(): string {
-  return join(tmpdir(), 'cdp-listen.pid');
+  return daemonPidFilePath();
 }
 
 async function spawnDaemon(): Promise<void> {
-  const script = process.argv[1] || __filename;
+  const script = daemonScriptPath();
   // 把当前浏览器端口(经 ensureBrowser 从 browser.json 同步的 PORT)注入 daemon,daemon 连对端口。
   const child = spawn(process.execPath, [script, '__daemon'], {
     detached: true,
@@ -28,13 +35,16 @@ async function spawnDaemon(): Promise<void> {
   child.unref();
 }
 
+function daemonScriptPath(): string {
+  return process.argv[1] || __filename;
+}
+
+function currentDaemonIdentity(): DaemonIdentity {
+  return daemonIdentity(process.env, undefined, HOST, PORT);
+}
+
 export async function daemonHealthy(port = LOGS_PORT): Promise<boolean> {
-  try {
-    const r = await fetch(`http://127.0.0.1:${port}/health`);
-    return r.ok;
-  } catch {
-    return false;
-  }
+  return probeDaemonHealth(port, currentDaemonIdentity());
 }
 
 // 异步确保 daemon 在跑(打开页面时自动注入守护;失败不阻塞主流程)。
@@ -46,14 +56,14 @@ export async function maybeSpawnDaemon(): Promise<void> {
 }
 
 export async function ensureDaemon(port = LOGS_PORT): Promise<number> {
-  if (await daemonHealthy(port)) return port;
-  await spawnDaemon();
-  const t0 = Date.now();
-  while (Date.now() - t0 < 8000) {
-    await sleep(300);
-    if (await daemonHealthy(port)) return port;
-  }
-  throw new Error('监听 daemon 启动失败');
+  await ensureDaemonReady(port, currentDaemonIdentity(), {
+    fetchImpl: fetch,
+    retireDaemonImpl: kind =>
+      retireDaemonProcess(port, daemonScriptPath(), kind === 'legacy' ? legacyDaemonPidFilePath() : pidFilePath()),
+    sleepImpl: sleep,
+    spawnImpl: spawnDaemon,
+  });
+  return port;
 }
 
 /**
@@ -75,6 +85,7 @@ async function attachInject(ws: WebSocket): Promise<void> {
  */
 export async function cmdListen(): Promise<never> {
   const attached = new Map<string, WebSocket>();
+  const identity = currentDaemonIdentity();
 
   async function injectMon(target: Target): Promise<void> {
     let ws: WebSocket;
@@ -116,7 +127,7 @@ export async function cmdListen(): Promise<never> {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${LOGS_PORT}`);
     res.setHeader('content-type', 'application/json; charset=utf-8');
     if (url.pathname === '/health') {
-      res.end(JSON.stringify({ ok: true, targets: attached.size }));
+      res.end(JSON.stringify({ ok: true, identity, targets: attached.size }));
       return;
     }
     if (url.pathname === '/shutdown') {
@@ -130,15 +141,25 @@ export async function cmdListen(): Promise<never> {
     res.end('{}');
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(LOGS_PORT, '127.0.0.1', resolve);
+  await initializeBoundDaemon({
+    bind: () =>
+      new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(LOGS_PORT, '127.0.0.1', resolve);
+      }),
+    publishPid: () => {
+      mkdirSync(cdpHome(), { recursive: true });
+      writeFileSync(pidFilePath(), String(process.pid));
+    },
+    rollbackBind: () =>
+      new Promise<void>(resolve => {
+        server.close(() => resolve());
+      }),
+    syncInitialTargets: sync,
   });
-  await sync();
   setInterval(() => {
     sync().catch(() => {});
   }, 500);
-  writeFileSync(pidFilePath(), String(process.pid));
   process.on('SIGINT', () => process.exit(0));
   process.on('SIGTERM', () => process.exit(0));
   console.error(`注入守护 daemon 就绪 :${LOGS_PORT},tabs=${attached.size}`);

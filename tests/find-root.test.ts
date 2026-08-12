@@ -7,6 +7,7 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   findRoot,
+  findRootAll,
   refElement,
   climbAncestors,
   entryEl,
@@ -21,11 +22,18 @@ const refGlobals = globalThis as RefTestGlobals;
 
 // ---- 全局 stub:document.querySelector(各测试填 uniqueSel) ----
 const uniqueSel = new Map<string, unknown>();
+
+function asMatches(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  return value == null ? [] : [value];
+}
+
 function stubDocument() {
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
     value: {
-      querySelector: (sel: string) => uniqueSel.get(sel) ?? null,
+      querySelector: (sel: string) => asMatches(uniqueSel.get(sel))[0] ?? null,
+      querySelectorAll: (sel: string) => asMatches(uniqueSel.get(sel)),
       get body() {
         return uniqueSel.get('body');
       },
@@ -137,7 +145,10 @@ test('findRoot: 普通 selector 走 document.querySelector', () => {
 
 /** 造假 shadowRoot:含独立 querySelector 表。 */
 function mkShadow(queryMap: Record<string, unknown>) {
-  return { querySelector: (sel: string) => queryMap[sel] ?? null };
+  return {
+    querySelector: (sel: string) => asMatches(queryMap[sel])[0] ?? null,
+    querySelectorAll: (sel: string) => asMatches(queryMap[sel]),
+  };
 }
 
 test('findRoot: shadow 链 a >>> b 逐段穿透 shadowRoot', () => {
@@ -182,6 +193,29 @@ test('findRoot: >>> 周围带空白会被 trim', () => {
   const host = { tag: 'div', shadowRoot: mkShadow({ a: inner }) };
   uniqueSel.set('div', host);
   assert.equal(findRoot('div  >>>  a'), inner);
+});
+
+test('findRootAll: shadow 链从 document 的全部 host 收集链尾命中', () => {
+  const first = { tag: 'first' };
+  const second = { tag: 'second' };
+  const host1 = { shadowRoot: mkShadow({ '.item': [first] }) };
+  const host2 = { shadowRoot: mkShadow({ '.item': [second] }) };
+  uniqueSel.set('.host', [host1, host2]);
+
+  assert.deepEqual(findRootAll('.host >>> .item'), [first, second]);
+  assert.equal(findRoot('.host >>> .item'), first, '非 --all 仍只走首个 host 和首个命中');
+});
+
+test('findRootAll: 多级 shadow 链在每一级展开全部匹配 host', () => {
+  const targets = [{ id: 'a1' }, { id: 'a2' }, { id: 'b1' }, { id: 'c1' }];
+  const innerA = { shadowRoot: mkShadow({ button: [targets[0], targets[1]] }) };
+  const innerB = { shadowRoot: mkShadow({ button: [targets[2]] }) };
+  const innerC = { shadowRoot: mkShadow({ button: [targets[3]] }) };
+  const outer1 = { shadowRoot: mkShadow({ '.inner': [innerA, innerB] }) };
+  const outer2 = { shadowRoot: mkShadow({ '.inner': [innerC] }) };
+  uniqueSel.set('.outer', [outer1, outer2]);
+
+  assert.deepEqual(findRootAll('.outer >>> .inner >>> button'), targets);
 });
 
 // ---- shadow 检测 / 穿透链生成(inShadow / outermostHost / buildShadowChain) ----
