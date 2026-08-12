@@ -1,6 +1,6 @@
 ---
 name: cdp-control
-description: 控制本地浏览器——列出/打开/关闭/导航页面、提取元素、点击、填表、执行 JS、截图、读控制台日志。自动化优先写成脚本用 `run` 一次执行。核心模型:view 感知页面(命中站点 recipe 输出聚焦摘要,否则整页文本+结构紧凑树,生成可操作 ref),ref 是操作索引(会话句柄)。首屏外没加载(如评论区)用 `view --scroll-to-load` 先滚动再建树。任何用 ref 的命令失效自动自愈。长页噪声用 fold 持久规则(手动编辑 `~/.cdp-control/rules/fold.csv`,类 uBlock);已知站点聚焦摘要用 `~/.cdp-control/rules/recipes/` 站点 recipe。
+description: 控制本地浏览器——列出/打开/关闭/导航页面、提取元素、点击、填表、执行 JS、截图、读控制台日志。自动化优先写成脚本用 `run` 一次执行。核心模型:view 感知页面(命中站点 recipe 输出聚焦摘要,否则整页文本+结构紧凑树,生成可操作 ref),ref 是操作索引(会话句柄)。大页面用 `view --budget <chars>` 保留骨架并按体量自动折叠,再用 `view <ref> --budget <chars>` 渐进展开。首屏外没加载(如评论区)用 `view --scroll-to-load` 先滚动再建树。任何用 ref 的命令失效自动自愈。长页噪声用 fold 持久规则(手动编辑 `~/.cdp-control/rules/fold.csv`,类 uBlock);已知站点聚焦摘要用 `~/.cdp-control/rules/recipes/` 站点 recipe。
 ---
 
 # CDP 浏览器控制
@@ -13,7 +13,7 @@ description: 控制本地浏览器——列出/打开/关闭/导航页面、提�
 
 铁律:
 - `list`/`open` 自动确保浏览器就绪(CDP 未起自动启动)。
-- **首次看页面必须完整 `view`**(别 `| head`,别 `--visible-only`);view 输出**严禁 head/sed/grep 过滤**,局部只能用 `view <ref>`/`--ancestor/--selector-file/--visible-only`。
+- **首次看页面必须完整 `view` 或带骨架的 `view --budget N`**(别 `| head`,别 `--visible-only`);view 输出**严禁 head/sed/grep 过滤**,长页先给预算再按折叠 ref 渐进展开。
 - **裸 `view` 命中站点 recipe 会输出聚焦摘要而非整页树**——已知站点(如知乎)这是想要的聚焦版;要整页结构用 `view --tree`(或任何建树意图)。
 - 定位一律从 view 已有 ref 出发,**严禁 JS eval 探查 DOM**;要 selector(如写 fold 规则)手动写。
 - 多步交互写成 `.js` 脚本用 `run` 一次执行,省模型往返。
@@ -48,8 +48,15 @@ cdp-control run "./scripts/你的脚本.js"
 | `--scroll-wait <ms>` | 滚动后等内容渲染再建树(默认 1000,`--scroll-wait 0` 关),否则漏掉新回答/评论区 |
 | `--scroll-pages <n>` | 循环向下滚 N 屏(每屏等 innerHeight+150ms),检测 scrollHeight 增长,连续 2 次不增长提前停。用于无限流。知乎等"用户主动滚动"反爬站点分步滚也可能触发不了,是反爬不是 bug |
 | `--scroll-to <selector>` | 先滚到匹配元素(如 B站 `#bili-comments`)停下触发懒加载,命中不到优雅降级。比 --scroll-pages 精准 |
+| `--max-len <n>` | 单条文本片最多 n 字,超出补 `…`;不限制整页总量 |
+| `--budget <chars>` | 限制结构树总字符数;超出时按子树渲染体量从大到小折叠,保留带 ref 的规模+预览占位,末尾给预算账。与 `--max-len` 可叠加 |
+| `--focus <ref>` | 整页保留祖先位置骨架、折叠其它区域,只展开指定 ref 子树;必须与 `--budget` 同用,且与位置 ref/`--selector-file` 互斥 |
 
-**铁律**:首次看页面必须完整 `view`(别 `| head`,别 `--visible-only`)。`--visible-only` 只输出视口内,视口外的回答/评论区**整段漏掉**,会误以为页面只有首屏。整页首次 view 已默认 scroll-to-load,评论区等也一次到位。
+**铁律**:首次看页面必须完整 `view` 或 `view --budget N`(别 `| head`,别 `--visible-only`)。预算模式保留整页骨架;`--visible-only` 会把视口外回答/评论区**整段漏掉**,不是替代方案。整页首次 view 已默认 scroll-to-load,评论区等也一次到位。
+
+**大页渐进展开**:`view --budget 8000` 先拿整页骨架;看到 `▸ [ref=48] ... (37 个元素 · 约 4.2k 字) ~"预览"` 后用 `view 48 --budget 8000`,若该区域仍大则其内部继续出现可展开的 `▸`。循环 `view --budget 8000 → view 48 --budget 8000 → view 213 --budget 8000 → click 260`,每轮只带当前预算窗口。预算按渲染字符粗估(token 中中文更接近 1:1);骨架+账单本身超过极小预算时会优先保骨架并如实报告超额。
+
+需要在一屏同时保留全局位置与局部细节时,上一轮拿到 ref 后用 `view --focus 48 --budget 8000`:焦点祖先路径保留、其它区域折叠、只展开 48 子树;焦点内部仍超量时继续自动折叠。
 
 **定位 = 从已有 view 出发,别 JS 探查**:层级、内容、ref 全在眼前,不需猜结构。要定位区域,从 view 已有 ref 出发;要把"内容叶子"抬到"区域容器",用 `--ancestor k`(k 不确定逐个试 1/2/3)。
 
@@ -116,7 +123,7 @@ cdp-control run "./scripts/你的脚本.js"
 | `fetch <url>` | 一次性抓取:临时开 tab→等渲染→感知(命中 recipe 输出摘要,否则整页树,整页首次自动 scroll-to-load)→关 tab,输出含 `[ref]`,不残留 tab |
 | `navigate <url>` | 导航 |
 | `eval "<js>"` | 执行 JS,返回 returnByValue 值 |
-| `view [<ref>] [--tree] [...]` | 感知:裸 `view`(无建树意图)命中站点 recipe 就输出聚焦摘要;否则整页文本+结构紧凑树。`--tree`/`[<ref>]`/`--selector-file`/`--visible-only`/`--scroll-*` 任一都**强制树**。首次必须完整 view(禁 --visible-only/截断)。命中 fold 规则输出 `▸ [ref=i] <备注>`;视区标 `[ref=i·屏]`;INPUT/TEXTAREA 显示 `[type=... value="..." placeholder="..."]` |
+| `view [<ref>] [--tree] [--budget <chars>] [--focus <ref>] [...]` | 感知:裸 `view`(无建树意图)命中站点 recipe 就输出聚焦摘要;否则整页文本+结构紧凑树。`--tree`/`[<ref>]`/`--selector-file`/`--visible-only`/`--scroll-*`/`--budget`/`--focus` 任一都**强制树**。`--budget` 超量自动折叠并保留 `▸ [ref=i]` 骨架,末尾报预算账;`view <ref> --budget N` 在区域内部继续折叠;`--focus R --budget N` 保留整页骨架只展开 R。`--max-len` 管单条文本,可叠加。命中 fold 规则输出 `▸ [ref=i] <备注>`;视区标 `[ref=i·屏]`;INPUT/TEXTAREA 显示 `[type=... value="..." placeholder="..."]` |
 | `click <target> [--ancestor <k>] [--dom] [--no-feedback] [--feedback-delay <ms>]` | 默认坐标真实点击(target 全数字=ref 否则 selector,穿透 shadow);`--dom` 显式合成。默认带反馈 |
 | `fill <target> <值> [--ancestor <k>] [...]` | 填输入框并派发 input/change。默认带反馈 |
 | `focus <target> [--ancestor <k>] [...]` | 聚焦元素。默认带反馈 |
@@ -189,7 +196,7 @@ await cdp.close(t);
 | `fetchPage(url)` | `string[]` 视图 lines(临时开 tab→等加载→view→关 tab) |
 | `navigate(target, url)` | — |
 | `eval(target, js, timeout?)` | returnByValue 值 |
-| `view(target, {selector?,ref?,ancestor?})` | `{ok, lines}`(锚点互斥,折叠输出 `▸ [ref=i] <备注>`) |
+| `view(target, {selector?,ref?,ancestor?,maxLen?,budget?,focus?})` | `{ok, lines}`(锚点互斥;`budget` 总字符预算,自动折叠输出带规模/预览的 `▸ [ref=i]` + 末行账单;`focus` 须配 budget 且与 ref/selector 互斥;`maxLen` 管单条文本) |
 | `read(target, {container, expand?, wait?})` | 展开再读(recipe 用):按容器 selector 取**完整 Markdown**;expand 先展开再取全文。返回 `{ok, markdown, lines}` |
 | `click(target, selector \| {ref:12}, {noFeedback?,feedbackDelay?,dom?})` | `{ok, tag, feedback?}`;默认坐标真实点击,ref 失效自动自愈 |
 | `fill(target, selector \| {ref:12}, value, opts?)` | `{ok, tag, feedback?}` |

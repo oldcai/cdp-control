@@ -74,6 +74,7 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 ### view-core(buildView)
 **生成树 + ref**:内容/交互元素的紧凑树(view/feedback-collect/recoverRef/find 共用)。`buildView(root,{visibleOnly,viewport,folds})`。
 - **两遍先序**:遍一(`simplify`)只建树 + 打标记(`wantRef`/`wantHidden`)+ 暂存 `node.el`,不登记 `__cdpRefs`;遍二(`assign`)按先序 DFS 调 `registerRef` 复用或追加。输出仍按树序,ref 数字可乱序；复用节点会按本次树位置刷新 `parentRef`。
+- **预算句柄不另分配**:`assign` 把 `registerRef` 返回的同一个稳定号码记到 `node.budgetRef`(含默认不打印 ref 的 `wantHidden` 包装节点);自动折叠只引用既有号,绝不二次登记/重排,所以开关 `--budget` 不会让 ref 漂移。
 - **标记**:`wantRef`(内容/交互/折叠/shadow 宿主)→ 设 `node.ref` 并打印 `[ref=N]`;`wantHidden`(纯包装含内容)→ 登记但不设 `node.ref`(view 不打印,info 反查可用)。
 - **只追加不重置**:同一 document 内所有路径都不清空登记表；旧号永不换指向,新元素只追加。
 - **`viewport:true`**:算 `isInViewport` 存 `node.view`,输出 `[ref=i·屏]`/`[ref=i]`。
@@ -84,6 +85,14 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 - **语义状态**:simplify 只读 DOM/ARIA 补 `node.state`(`pressed/checked/expanded/selected/disabled/open`,`mixed` 保留为 `name=mixed`);状态跟 ref 同括号输出，checkbox/radio 的 checked 并入 `input[...]`，无状态零额外字符。
 - **导出**:`strip`/`ownElText`(元素自身直接文本)/`subtreeText`(穿透 shadow)/`childrenOf`(穿透 shadow 取子)/`isInViewport`/`elLabel`/`buildView`。
 - **滚动加载**:整页完整 `view` 首次自动 `scrollToLoad()`(置 `__cdpFullViewDone`,同页只滚一次;局部/`--visible-only`/显式滚动参数不触发),滚动后默认等 `scrollWait`(默认 1000ms,`--scroll-wait 0` 关)才建树。`api.fetchPage` 靠它一次抓全,等待条件="body 有非空文本"。
+
+### view-format + budget
+**纯渲染 + 总量折叠**:`view-format.ts` 的 `markText/formatView` 完全脱离 DOM;`view-budget.ts` 在树和 ref 全部完成后才做预算决策。
+- **体量与规划**:`formatViewWithSpans(maxLen)` 在整页的一次真实渲染中记录每个可见候选的连续行区间,直接得到「换成占位能省多少」。规划器优先用多个更细的后代逼近预算,后代总压缩能力不够时才退到祖先;最后最多 8 次整树实渲染校正结构/账单开销。这既避免深链/大页逐候选重渲染的平方退化,也避免最外层包装一次吃掉几乎全部可用预算。
+- **折叠占位**:预算折叠不删 `kids`、不改 ref,只给 formatter 一张 `budgetRef → summary` 映射。输出 `▸ [ref=N] tag (M 个元素 · 约 X 字) ~"首句…"`;根节点永不入选,故 `view <ref> --budget N` 会保留该区域根并只在内部继续折叠。
+- **focus**:`view --focus R --budget N` 先把既有 `R` 解析成 Element,整页重建时放开该元素的 composed 祖先路径(不应用持久/临时 fold),再按 Element 身份找回树节点。纯函数先折焦点路径之外「占位确实更短」的首个可登记区域,保留祖先骨架并完整展开焦点子树;若仍超预算,只在焦点子树内部继续规划折叠。`focus` 与位置 ref/selector 互斥且必须带预算。
+- **账单与下界**:显式预算时末行是 `# 预算 N 字 · 已用 U · 折叠 K 处(view <ref> 展开)`,`已用`包含树、换行和账单自身。若骨架+账单本身已经超过极小预算,骨架优先且账单如实报告超额。
+- **兼容性**:`budget` 缺省时入口仍直接走原 `formatView`,不加账单、输出逐字节不变。`maxLen` 先约束单条文本,`budget` 再约束总渲染量,两者正交叠加。
 
 ### locate(ref→selector)
 **转 selector**:`inject/ref.ts` 把 ref 翻译成稳定 CSS selector,供回显与 selector-file 复用。
@@ -166,8 +175,8 @@ Node 侧统一 `invoke(target, expr)` 执行注入脚本并解包:成功返回�
 ## 测试
 
 - `tests/*.test.ts` 用 Node 内置 `node:test`+`node:assert/strict`,零运行时依赖。
-- 纯函数单测:`view-utils.ts`、`view-format.ts`(formatView/markText)、`genSel.ts`、`find-root.ts`(refElement/climbAncestors/classifyRef)、`ref-registry.test.ts`(WeakRef 形态/复号追加/parentRef 刷新/WeakMap 只查)、`click-position.ts`(中心可用性/跨 shadow 命中链)、`click-events.ts`(moved/pressed/released 顺序与参数)、`folds.ts`(parseRules/domainMatch/pathMatch/matchFolds/loadFolds,临时 CDP_FOLD_FILE)、`ignore-links.ts`(hrefForMatch/globToRegExp/linkRuleMatch/parseLinkRules + 浏览器侧 linkIgnored)、`target-arg.ts`(normArg 防呆)、`keys.ts`(parseKeySpec)、`transport.ts`(resolveTarget)、`port.ts`(portFree/findFreePort,真实 bind 高位端口不 mock)。
-- 注入侧 DOM 相关(buildView/fold/inputInfo/state、find-entry 穿透 shadow、feedback observer/子树黑名单、recoverRef live 分支)依赖真实 DOM,靠浏览器实测(见 SKILL.md),不写单测。纯函数分支(`formatView` 的 `·屏`/状态/shadow 占位/fold 优先/`inputAttr`、`feedback` 的 `foldTimestampRun`/class 差集/属性限量)有单测。
+- 纯函数单测:`view-utils.ts`、`view-format.ts`(formatView/markText)、`view-budget.ts`(排序/削减/账单/骨架下界/maxLen 叠加/候选不重叠/3000 节点性能回归)、`genSel.ts`、`find-root.ts`(refElement/climbAncestors/classifyRef)、`ref-registry.test.ts`(WeakRef 形态/复号追加/parentRef 刷新/WeakMap 只查)、`click-position.ts`(中心可用性/跨 shadow 命中链)、`click-events.ts`(moved/pressed/released 顺序与参数)、`folds.ts`(parseRules/domainMatch/pathMatch/matchFolds/loadFolds,临时 CDP_FOLD_FILE)、`ignore-links.ts`(hrefForMatch/globToRegExp/linkRuleMatch/parseLinkRules + 浏览器侧 linkIgnored)、`target-arg.ts`(normArg 防呆)、`keys.ts`(parseKeySpec)、`transport.ts`(resolveTarget)、`port.ts`(portFree/findFreePort,真实 bind 高位端口不 mock)。
+- 注入侧复杂 DOM 行为(buildView/fold/inputInfo/state、find-entry 穿透 shadow、feedback observer/子树黑名单、recoverRef live 分支)主要靠浏览器实测(见 SKILL.md);预算链路另用最小假 DOM 锁定 `buildView` 两遍分配/复号 → 自动折叠不改 ref。纯函数分支(`formatView` 的 `·屏`/状态/shadow 占位/fold 优先/`inputAttr`、`feedback` 的 `foldTimestampRun`/class 差集/属性限量)有单测。
 
 ## 文档分工
 

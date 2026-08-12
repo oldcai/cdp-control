@@ -8,7 +8,8 @@
  * 建视图复用 lib/view-core 的 buildView;带 ref 的节点额外标在视区(view,输出 [ref=i·屏])。
  */
 import { setResult } from './lib/result';
-import { markText, formatView } from './lib/view-format';
+import { markText, formatView, type ViewNode } from './lib/view-format';
+import { renderBudgetedView, renderFocusedBudgetedView } from './lib/view-budget';
 import { buildView } from './lib/view-core';
 import { findRoot, refElement, climbAncestors } from './lib/find-root';
 import { notFoundResult, type OperableArg } from './lib/find';
@@ -22,6 +23,17 @@ setResult((async () => {
   // 装只读探针 __cdpProbe(refOf/refOfSelector/text):recipe 约定先 view 建树再 eval,故随 view
   // 注入即保证可用;探针只查已建树 __cdpRefs、绝不注册；每次刷新实现以兼容旧页面残留。
   installProbe();
+  if (__CDP_ARG__.focus != null && (__CDP_ARG__.ref != null || __CDP_ARG__.selector)) {
+    return setResult({ ok: false, err: '--focus 与位置 ref / selector 不能同时使用' });
+  }
+  if (__CDP_ARG__.focus != null && __CDP_ARG__.budget == null) {
+    return setResult({ ok: false, err: '--focus 必须与 --budget 配合使用' });
+  }
+  // focus 的输入 ref 来自上一轮 view；先解析成 Element 身份，重建后再在新树中定位同一元素。
+  const focusEl = __CDP_ARG__.focus != null ? refElement(__CDP_ARG__.focus) : null;
+  if (__CDP_ARG__.focus != null && !focusEl) {
+    return setResult({ ok: false, err: `focus ref=${__CDP_ARG__.focus} 无效或已失效(请先 view 拿到当前 ref)` });
+  }
   // 锚点互斥:ref 优先(读上一次 view 登记的 __cdpRefs),
   // 其次 selector,缺省 body。--ancestor 为统一爬父修饰符,对任一锚点生效。
   let root: Element | null;
@@ -93,7 +105,42 @@ setResult((async () => {
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
   }
   const visibleOnly = !!__CDP_ARG__.visibleOnly;
-  const v = buildView(root, { visibleOnly, viewport: true, folds: __CDP_ARG__.folds, ignoreLinks: __CDP_ARG__.ignoreLinks, maxLen: __CDP_ARG__.maxLen });
+  const v = buildView(root, {
+    visibleOnly,
+    viewport: true,
+    folds: __CDP_ARG__.folds,
+    ignoreLinks: __CDP_ARG__.ignoreLinks,
+    maxLen: __CDP_ARG__.maxLen,
+    unfoldPathTo: focusEl || undefined,
+  });
   markText(v);
-  return setResult({ ok: true, lines: formatView(v, __CDP_ARG__.maxLen) });
+  // 缺省路径必须保持原输出逐字节不变；只有显式给 budget 才追加账单并启用自动折叠。
+  let lines: string[];
+  if (__CDP_ARG__.budget == null) {
+    lines = formatView(v, __CDP_ARG__.maxLen);
+  } else if (focusEl) {
+    const findFocusNode = (n: ViewNode): ViewNode | null => {
+      if (n.el === focusEl) return n;
+      for (const kid of n.kids) {
+        const found = findFocusNode(kid);
+        if (found != null) return found;
+      }
+      return null;
+    };
+    const rebuiltFocus = findFocusNode(v);
+    const rebuiltFocusRef = rebuiltFocus?.budgetRef ?? rebuiltFocus?.ref ?? null;
+    if (!rebuiltFocus || rebuiltFocusRef == null) {
+      return setResult({ ok: false, err: `focus ref=${__CDP_ARG__.focus} 对应元素不在当前整页视图树中` });
+    }
+    if (rebuiltFocus.budgetFoldable === false) {
+      return setResult({
+        ok: false,
+        err: `focus ref=${__CDP_ARG__.focus} 只代表合并文本的末段元素，不能作为独立焦点`,
+      });
+    }
+    lines = renderFocusedBudgetedView(v, __CDP_ARG__.budget, rebuiltFocusRef, __CDP_ARG__.maxLen).lines;
+  } else {
+    lines = renderBudgetedView(v, __CDP_ARG__.budget, __CDP_ARG__.maxLen).lines;
+  }
+  return setResult({ ok: true, lines });
 })());
