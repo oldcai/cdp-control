@@ -40,14 +40,14 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 
 ## 浏览器连接(ensureBrowser / kill)
 
-- **端口与用户数据路径入配置**:`browser.json` 的 `port`(默认 9222)与 `userData`(默认 `~/.cdp-control/user-data`)用户可改。`ensureBrowser()` 读配置后 `transport.setPort(cfg.port)` 同步端口,所有命令连该端口。`CDP_PORT` env 仅无配置时兜底默认。语义:**已就绪**(配置端口有响应)→ 直接用,就绪零开销(读配置 + 1 次 GET `/json/version`,顺带拿浏览器名);**未就绪** → 读 `~/.cdp-control/browser.json` 拉起(缺失自动发现生成 / 存在则用 / 损坏警告不兜底 / 用户可改)。
+- **端口与用户数据路径入配置**:`browser.json` 的 `port`(默认 9222)与 `userData`(默认 `~/.cdp-control/user-data`)用户可改。配置端口是权威值,`ensureBrowser()` 读配置后 `transport.setPort(cfg.port)` 同步端口,所有命令只连/启动这个端口；无配置 bootstrap 固定用 9222,不从 `CDP_PORT` 漂移。语义:**健康 CDP**(`/json/version` 含 websocket)→ 直接复用且不 kill；**端口空闲**→ 在同一配置端口拉起；**端口被非健康端点监听**→ 先给并发冷启动 3s 有界就绪宽限，kill 前最后复探,仍非健康才结束真正服务该 host/port 的 TCP LISTEN listener,确认释放后仍在同一端口拉起。绝不 findFreePort、改写或回写漂移端口；枚举、kill、状态确认或释放失败均 fail closed 且不得 spawn。
 - **启动配置 `~/.cdp-control/browser.json`**(用户可编辑,权威):`{ exe, kind, args, port, userData }`。`args` 存稳定参数(remote-allow-origins/no-first-run/window-size 等);`--remote-debugging-port` 与 `--user-data-dir` 由工具据 `port`/`userData` 生成。缺失时 bootstrap 用 `browser-discover.ts` 跨平台候选(Edge 优先)首个能拉起者原子写配置;损坏(JSON 非法/exe 不存在/args 非数组/显式 port 非法)打印清晰错误、**不 fallback**,用户改文件。原子写(tmp+rename)。
 - **跨平台发现 `browser-discover.ts`**(纯函数):win env 路径表(Edge/Chrome 各通道)+`where`;mac 硬编码精确 `.app`+`Contents/MacOS/<bin>`(Safari 排除);linux `command -v` + `.desktop`。
 - **配置解析 `browser-config.ts`**(纯函数):`parseBrowserConfig`(port/userData 缺省取默认,损坏抛清晰错)/`defaultArgs`(linux 加 `--disable-dev-shm-usage`)/`browserConfigPath`/`DEFAULT_PORT`/`DEFAULT_USER_DATA`。
 - **端口被占自动改口(`port.ts`)**:启动前先 `portFree(port)` 探 `127.0.0.1:<port>` 能否绑定;被别的进程占着(常见:用户自己手动开、带 remote-debugging 的另一个浏览器)则 `findFreePort(port+1)` 换口——**必须换**:Chrome 绑不上 IPv4 时**不报错退出**,而是静默退到 `[::1]:<port>`,客户端连 `127.0.0.1` 永远拿不到 `/json/version`,表现为"启动超时/未找到可用浏览器"(2026-08 m2 实测)。有配置则把新端口**回写 browser.json**(下次直接对);bootstrap 则写进新配置。走到 coldStart 说明占用者不是可用 CDP 端点(否则 `probeReady` 早命中直接复用)。**`launchReady` 再兜一层**:端口上浏览器没就绪(20s)就换个空闲口重试一次——`portFree` 是"能不能 bind"的探测,posix 上准,win 上占用方用了 `SO_REUSEADDR` 时可能漏检,重试把平台差异抹平。全流程无平台分支,win/mac/linux 同一条路径。
 - **冷启动**:`spawn(exe, [...args, --remote-debugging-port=<cfg.port>, --user-data-dir=<cfg.userData>], {detached:true, stdio:'ignore'}).unref()` → 轮询 `/json/version` 就绪(20s)→ `maybeSpawnDaemon`。浏览器不随父进程死(持久)。bootstrap 全候选失败时区分两种错:**一个候选都不存在**(未装浏览器)vs **存在但没在端口上就绪**(列出试过谁)。
 - **"一切命令自愈"**:`api.resolve/list/open` 前置 `ensureBrowser()`(幂等)→ 所有 target 命令与 list/open 未起自动启动;`transport.evaluate` 由 api 的 `connectTarget` 包一层——连接失败(浏览器死/target stale)→ ensure + 按 url 重 resolve + 重试一次(堵 run 脚本直传 stale target);daemon(走 `pageWs`/`send`)天然豁免,不会死循环拉起浏览器。
-- **`kill` 命令**:`cdp-control kill` 从 `browser.json` 读 `port`(**不**用默认 9222);**无配置 → kill 不生效**。找监听进程(netstat/lsof → pid)→ taskkill `/F /T`/SIGKILL → 等端口释放(Edge 崩溃自启会重绑,等待确认)。daemon 经 `spawnDaemon` 以 `env.CDP_PORT = transport.PORT` 拉起,端口由 ensureBrowser 从配置同步。
+- **`kill` 命令**:`cdp-control kill` 从 `browser.json` 读 `port`(**不**用默认 9222);**无配置 → kill 不生效**。精确枚举服务目标 host/port 的全部 TCP LISTEN 进程(netstat/lsof → pid)→ taskkill `/F /T`/SIGKILL → connect+bind 确认端口释放(Edge 崩溃自启会重绑,等待确认)；枚举、结束或状态确认失败均不得谎报成功。daemon 经 `spawnDaemon` 以 `env.CDP_PORT = transport.PORT` 拉起,端口由 ensureBrowser 从配置同步。
 
 ## 注入脚本契约(改动注入脚本必读)
 

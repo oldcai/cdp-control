@@ -17,6 +17,11 @@ export function browserConfigPath(): string {
 export const DEFAULT_PORT = 9222;
 export const DEFAULT_USER_DATA = () => join(homedir(), '.cdp-control', 'user-data');
 
+/** browser.json 存在时配置端口权威；无配置 bootstrap 也固定用 9222。 */
+export function effectiveBrowserPort(config: Pick<BrowserConfig, 'port'> | null): number {
+  return config?.port ?? DEFAULT_PORT;
+}
+
 const KINDS: BrowserKind[] = ['edge', 'chrome', 'chromium', 'brave', 'arc'];
 
 /** 解析 browser.json 文本;损坏则抛清晰错误(供调用方警告、不兜底)。port/userData 缺省取默认值,显式非法则判坏。 */
