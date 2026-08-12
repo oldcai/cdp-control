@@ -112,6 +112,7 @@ async function waitReady(
   timeoutMs = 20000,
   launched: BrowserChild | null = lastLaunch.launched,
   assertAuthority?: () => void,
+  resolveAddresses: HostResolver = resolvedSocketHosts,
 ): Promise<void> {
   let earlyExit: string | null = null;
   const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
@@ -124,7 +125,7 @@ async function waitReady(
   try {
     const dependencies = {
       probe: async (probeTimeoutMs: number) => {
-        const probe = await probeReady(probeTimeoutMs);
+        const probe = await probeReady(probeTimeoutMs, resolveAddresses);
         return probe.ready;
       },
       exitReason: () => earlyExit,
@@ -410,7 +411,7 @@ function settleLaunchedPort(
 ): ReturnType<typeof settleFixedPortLaunch> {
   return settleFixedPortLaunch(
     port,
-    () => waitReady(20000, launched, () => assertAuthority(port)),
+    () => waitReady(20000, launched, () => assertAuthority(port), resolveAddresses),
     fixedPortDependencies(assertAuthority, resolveAddresses),
   );
 }

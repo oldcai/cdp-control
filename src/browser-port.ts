@@ -227,7 +227,9 @@ export async function waitForCdpReady(
     let ready = false;
     try {
       ready = await deps.probe(Math.min(1_000, remaining));
-    } catch {}
+    } catch (cause) {
+      if (cause instanceof FixedPortError) throw cause;
+    }
     deps.assertAuthority?.();
     // exact child 已退出时，端点变健康只能属于并发调用者。抛出早退真因，
     // 交给 settleFixedPortLaunch 重进门禁并正确分类为 reuse，不得谎报本轮 launch 成功。

@@ -345,6 +345,27 @@ test('waitForCdpReady: 早退宽限结束仍无健康 CDP 时保留真实退出�
   assert.equal(now, 3_000);
 });
 
+test('waitForCdpReady: 就绪探活抛出 FixedPortError 时立即 fail closed，不得改 pin 成功返回', async () => {
+  const changed = new FixedPortError('CDP_HOST 解析地址已变化(192.0.2.10 -> 192.0.2.99)，拒绝继续破坏性操作');
+  await assert.rejects(
+    () =>
+      waitForCdpReady(
+        {
+          probe: async () => {
+            throw changed;
+          },
+          exitReason: () => null,
+          sleep: async () => undefined,
+          now: () => 0,
+        },
+        20_000,
+        3_000,
+        1_000,
+      ),
+    error => error === changed,
+  );
+});
+
 test('killListenerPids: 单个 listener 结束失败仍尝试其余 PID，并聚合真因', () => {
   const attempted: number[] = [];
   const failures = killListenerPids([711, 712], pid => {
