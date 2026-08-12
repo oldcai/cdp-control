@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
-import { assertPublishChecklist, publishEnvironment } from '../scripts/publish-dry-run.mjs';
+import { fileURLToPath } from 'node:url';
+import {
+  assertPublishChecklist,
+  parseDryRunMetadata,
+  publishEnvironment,
+  stagePrepareWrapperSource,
+} from '../scripts/publish-dry-run.mjs';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const safeManifest = {
   name: 'cdp-control',
@@ -56,4 +67,39 @@ test('publish dry-run 子进程环境丢弃凭据并强制 dry-run、无效 regi
   assert.equal(environment.npm_config_registry, 'https://registry.invalid/');
   assert.equal(environment.npm_config_userconfig, '/tmp/user.npmrc');
   assert.equal(environment.npm_config_globalconfig, '/tmp/global.npmrc');
+});
+
+test('publish JSON 解析拒绝夹带非 JSON 前言，不猜测花括号边界', () => {
+  const metadata = JSON.stringify({ id: 'cdp-control@1.0.0', name: 'cdp-control', version: '1.0.0' });
+  assert.throws(
+    () => parseDryRunMetadata(`🔍 tsc --noEmit {future-log-field}\n${metadata}\n`),
+    /stdout 必须只包含 publish JSON/,
+  );
+  assert.deepEqual(parseDryRunMetadata(`${metadata}\n`), JSON.parse(metadata));
+});
+
+test('临时 stage prepare 包装器把被包装 build 的 stdout/stderr 全部物理转到 stderr', () => {
+  const tmpRoot = join(repoRoot, 'tmp');
+  mkdirSync(tmpRoot, { recursive: true });
+  const fixture = mkdtempSync(join(tmpRoot, 'publish-prepare-wrapper-'));
+  try {
+    writeFileSync(
+      join(fixture, 'build-source.mjs'),
+      ["console.log('🔍 stdout build log {with-braces}');", "console.error('▶ stderr build log');"].join('\n'),
+    );
+    const wrapper = join(fixture, 'build.mjs');
+    writeFileSync(wrapper, stagePrepareWrapperSource());
+
+    const result = spawnSync(process.execPath, [wrapper], {
+      cwd: fixture,
+      encoding: 'utf8',
+      shell: false,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /🔍 stdout build log \{with-braces\}/);
+    assert.match(result.stderr, /▶ stderr build log/);
+  } finally {
+    rmSync(fixture, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
+  }
 });

@@ -8,6 +8,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -20,6 +21,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
 const INVALID_REGISTRY = 'https://registry.invalid/';
 const ALLOWED_PREPARE = 'node build.mjs';
+const STAGE_BUILD_SOURCE = 'build-source.mjs';
 const BLOCKED_LIFECYCLE_HOOKS = Object.freeze([
   'prepublish',
   'prepublishOnly',
@@ -102,6 +104,32 @@ export function publishEnvironment(source, paths) {
   };
 }
 
+/**
+ * npm publish --json 会把 prepare 子进程的 stdout 和最终 JSON 都写到 npm stdout。
+ * stage 保持 `prepare=node build.mjs`，但用这个临时包装器执行原 build，并把两条输出流都接到 fd 2。
+ * 这样最终 JSON 与任意构建日志物理分流，不需要猜 JSON 在混合文本中的边界。
+ */
+export function stagePrepareWrapperSource() {
+  return `#!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const stageDir = dirname(fileURLToPath(import.meta.url));
+const result = spawnSync(process.execPath, [join(stageDir, '${STAGE_BUILD_SOURCE}')], {
+  cwd: stageDir,
+  shell: false,
+  stdio: ['inherit', 2, 2],
+});
+if (result.error) {
+  console.error(result.error.message);
+  process.exitCode = 1;
+} else {
+  process.exitCode = result.status ?? 1;
+}
+`;
+}
+
 function npmCliPath() {
   if (!process.env.npm_execpath) {
     throw new Error('缺少 npm_execpath；请通过 `npm run publish:dry-run` 执行，以保证 Windows 也使用正确的 npm CLI');
@@ -128,14 +156,19 @@ function runNpm(args, options) {
   return { stderr: result.stderr, stdout: result.stdout };
 }
 
-function assertDryRunMetadata(stdout, name, version) {
+export function parseDryRunMetadata(stdout) {
   let parsed;
   try {
     parsed = JSON.parse(stdout);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`无法解析 npm publish --dry-run --json 输出: ${message}\n${stdout}`);
+    throw new Error(`stdout 必须只包含 publish JSON，无法解析: ${message}\n${stdout}`);
   }
+  return parsed;
+}
+
+function assertDryRunMetadata(stdout, name, version) {
+  const parsed = parseDryRunMetadata(stdout);
   const serialized = JSON.stringify(parsed);
   if (!serialized.includes(name) || !serialized.includes(version)) {
     throw new Error(`publish dry-run 元数据未包含 ${name}@${version}:\n${stdout}`);
@@ -170,6 +203,8 @@ function main() {
     for (const entry of STAGE_ENTRIES) {
       cpSync(join(repoRoot, entry), join(stage, entry), { errorOnExist: true, recursive: true });
     }
+    renameSync(join(stage, 'build.mjs'), join(stage, STAGE_BUILD_SOURCE));
+    writeFileSync(join(stage, 'build.mjs'), stagePrepareWrapperSource());
 
     const stageManifest = {
       ...sourceManifest,
