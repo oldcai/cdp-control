@@ -12,7 +12,15 @@ import { linkIgnored } from './ignore-links.ts';
 import { cut, isPureCount } from './view-utils.ts';
 import { registerRef } from './find-root.ts';
 
-export interface ViewBuildOpts { visibleOnly?: boolean; viewport?: boolean; folds?: FoldItem[]; ignoreLinks?: string[]; maxLen?: number }
+export interface ViewBuildOpts {
+  visibleOnly?: boolean;
+  viewport?: boolean;
+  folds?: FoldItem[];
+  ignoreLinks?: string[];
+  maxLen?: number;
+  /** focus 重建时，命中该元素的 composed 祖先路径不应用持久/临时 fold。 */
+  unfoldPathTo?: Element;
+}
 
 const DROP = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'SVG', 'PATH', 'BR', 'IFRAME', 'PICTURE', 'SOURCE', 'USE']);
 /** 压空白 + 零宽字符、首尾 trim 的归一化(供文本采集/比对统一用)。 */
@@ -145,8 +153,22 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
   const viewport = !!opts.viewport;
   // 折叠规则来源:持久(Node 侧 folds.ts 按 hostname 过滤后传入)+ 会话级临时(__cdpFolds)。统一按 selector 匹配。
   const folds: FoldItem[] = [...(opts.folds || []), ...tmpFolds()];
+  const isComposedAncestor = (ancestor: Element, descendant: Element): boolean => {
+    let current: Element | null = descendant;
+    while (current) {
+      if (current === ancestor) return true;
+      if (current.parentElement) {
+        current = current.parentElement;
+        continue;
+      }
+      const rootNode = current.getRootNode();
+      current = rootNode instanceof ShadowRoot ? rootNode.host : null;
+    }
+    return false;
+  };
   // 折叠判定:元素命中任一 fold selector → 返回备注,否则 null。
   const foldNote = (el: Element): string | null => {
+    if (opts.unfoldPathTo && isComposedAncestor(el, opts.unfoldPathTo)) return null;
     for (const f of folds) { try { if (el.matches(f.selector)) return f.note || f.selector; } catch {} }
     return null;
   };
@@ -220,6 +242,8 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
           wantRef: true, el: lastEl, inView: lastInView, view: lastView,
           imgAlt: '', inputInfo: undefined, shadow: false, kids: [], size: 1,
           hasText: true, agg: false,
+          // 该合成节点的文本覆盖整段 run，但 el/ref 只指向最后一个真实元素；不能把它当作可回展开子树。
+          budgetFoldable: false,
         });
         i = j;
       } else {

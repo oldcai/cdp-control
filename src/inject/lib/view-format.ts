@@ -14,6 +14,7 @@ export interface ViewNode {
   shadow?: boolean; // 宿主带 shadowRoot:其下子节点来自 shadow DOM,CSS 选择器不能穿透,须用 ref 定位
   ref?: number;    // view 登记的全局引用序号(见 __cdpRefs),输出标注 [ref=i],agent 用它直接操作真实元素
   budgetRef?: number; // 该节点在 __cdpRefs 的稳定句柄(含默认不打印 ref 的隐藏包装节点),仅供预算折叠留占位
+  budgetFoldable?: boolean; // false=该 ref 只指向合并文本中的末段元素,不能代表/展开节点展示的完整内容
   hidden?: boolean; // 纯容器 div(叶子路径上的祖父):ref 已登记进 __cdpRefs 但 view 默认不显示,info 反查可显示
   fold?: string;   // 命中折叠规则:输出一行 ▸ [ref=i] <备注>,不展开子树(但保留 ref,view <ref> 可展开)
   foldSize?: number; // 被折叠掉的子树元素数,折叠行 ▸ 备注 (N) 显示规模(view-core 折叠点算)
