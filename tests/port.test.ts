@@ -2,7 +2,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:net';
-import { portFree, findFreePort, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
+import { portFree, portFreeOn, findFreePort, probeBind, endpointAlive, resolveHostAddrs, addrUnusable, addrServes, parseNetstatListeners, parseLsofListeners } from '../src/port.ts';
+
+/** 假 dns.lookup:让单测能构造任意地址集合,不打真 DNS。 */
+const fakeLookup = (...addrs: string[]) =>
+  (async () => addrs.map(address => ({ address }))) as unknown as Parameters<typeof resolveHostAddrs>[1];
 
 function listen(port: number, host = '127.0.0.1'): Promise<Server> {
   return new Promise((resolve, reject) => {
@@ -56,6 +60,89 @@ test('parseNetstatListeners: 同端口号不同地址族的两个进程,只取�
   const out = '  TCP    127.0.0.1:9223  0.0.0.0:0  LISTENING  11\n  TCP    [::1]:9223  [::]:0  LISTENING  22';
   assert.deepEqual(parseNetstatListeners(out, 9223), [11]);          // 默认 host=127.0.0.1,只认 IPv4 那个
   assert.deepEqual(parseNetstatListeners(out, 9223, '::1'), [22]);   // host 换成 IPv6 才认 [::1]
+});
+
+test('portFreeOn: localhost 要两个回环都空;只占 [::1] 时 IPv4 探测会漏', async () => {
+  const port = await findFreePort(19500);
+  const s6 = await listen(port, '::1');
+  assert.equal(await portFree(port, '127.0.0.1'), true);        // 只看 IPv4 会以为空闲
+  assert.equal(await portFreeOn(port, 'localhost'), false);     // 按 host 全地址判定才对
+  assert.equal(await portFreeOn(port, '::1'), false);
+  assert.equal(await portFreeOn(port, '127.0.0.1'), true);
+  await close(s6);
+  assert.equal(await portFreeOn(port, 'localhost'), true);
+});
+
+test('portFree: 只有 EADDRINUSE 算被占,绑不上的其它原因不算(否则会白换端口)', async () => {
+  // 203.0.113.1 是 TEST-NET-3,不属于本机 → EADDRNOTAVAIL,不该被当成"端口被占"
+  assert.equal(await portFree(19600, '203.0.113.1'), true);
+});
+
+test('probeBind: 绑上回 free,被占回 EADDRINUSE,地址不属于本机回错误码', async () => {
+  const port = await findFreePort(19950);
+  assert.equal(await probeBind(port), 'free');
+  const srv = await listen(port);
+  assert.equal(await probeBind(port), 'EADDRINUSE');
+  await close(srv);
+  assert.notEqual(await probeBind(19951, '203.0.113.1'), 'free');   // EADDRNOTAVAIL 之类
+});
+
+test('findFreePort: 挑端口要求"真能绑",绑不上的端口不许选(EACCES/地址不可用换口也没用)', async () => {
+  // 地址不属于本机:宽松的 portFree 会说"空闲",严格的挑端口必须拒绝,并在错误里点明真因
+  await assert.rejects(() => findFreePort(19960, 3, '203.0.113.1'), /无法绑定.*host=203\.0\.113\.1/);
+  assert.equal(await portFree(19960, '203.0.113.1'), true);          // 宽松语义保持不变(不谎称被占)
+  // 低端口 EACCES(root 下能绑,跳过)
+  if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+    await assert.rejects(() => findFreePort(1, 2), /无法绑定.*EACCES/);
+  }
+});
+
+test('endpointAlive: 有人监听 true,明确拒绝 false,判断不了 null(connect 探测,与 bind 语义分开)', async () => {
+  const port = await findFreePort(19700);
+  const srv = await listen(port);
+  assert.equal(await endpointAlive(port), true);                       // 有人应答
+  await close(srv);
+  assert.equal(await endpointAlive(port), false);                      // ECONNREFUSED = 明确没人
+  assert.equal(await endpointAlive(port, 'no-such-host.invalid', 500), null); // 解析不了 = 判断不了,不能当"没人"
+});
+
+test('endpointAlive: localhost 任一回环有人应答就算活着(kill 别把只占 [::1] 的当已释放)', async () => {
+  const port = await findFreePort(19800);
+  const s6 = await listen(port, '::1');
+  assert.equal(await endpointAlive(port, 'localhost'), true);
+  await close(s6);
+  assert.equal(await endpointAlive(port, 'localhost'), false);
+});
+
+test('resolveHostAddrs: 数值地址与 localhost 不查 DNS,其它主机名解析出全部地址', async () => {
+  const noCall = (async () => { throw new Error('不该查 DNS'); }) as unknown as Parameters<typeof resolveHostAddrs>[1];
+  assert.deepEqual(await resolveHostAddrs('127.0.0.1', noCall), ['127.0.0.1']);
+  assert.deepEqual(await resolveHostAddrs('::1', noCall), ['::1']);
+  assert.deepEqual(await resolveHostAddrs('localhost', noCall), ['127.0.0.1', '::1']);
+  // 主机名解析出多个地址 → 全部返回(只 bind 首个会漏另一地址上的占用)
+  assert.deepEqual(await resolveHostAddrs('my-dev-box', fakeLookup('::1', '127.0.0.1')), ['::1', '127.0.0.1']);
+  // 解析失败 → 原样返回,维持"判断不了"语义(listen/connect 自己会报错)
+  const boom = (async () => { throw new Error('ENOTFOUND'); }) as unknown as Parameters<typeof resolveHostAddrs>[1];
+  assert.deepEqual(await resolveHostAddrs('no-such-host.invalid', boom), ['no-such-host.invalid']);
+});
+
+test('addrUnusable: 只对回环放宽"地址族没开",远端不可达仍算未知(kill 不许谎报)', () => {
+  // 关了 IPv6 的机器上探 localhost 硬带的 ::1 → 这地址不存在,不是"状态未知"
+  for (const code of ['EAFNOSUPPORT', 'EPFNOSUPPORT', 'ENETUNREACH', 'EADDRNOTAVAIL', 'EHOSTUNREACH', 'EINVAL']) {
+    assert.equal(addrUnusable('::1', code), true, code);
+  }
+  assert.equal(addrUnusable('127.0.0.1', 'EAFNOSUPPORT'), true);
+  assert.equal(addrUnusable('::1', 'ETIMEDOUT'), false);        // 回环超时是真反常 → 未知
+  assert.equal(addrUnusable('192.0.2.1', 'ENETUNREACH'), false); // 远端网络断了,对面可能还活着 → 未知
+  assert.equal(addrUnusable('10.0.0.5', 'EHOSTUNREACH'), false);
+});
+
+test('endpointAlive: 本机不可用的回环地址跳过,不把已空闲端口报成"判断不了"', async () => {
+  const port = await findFreePort(19900);
+  // ::1 位置换成本机绝不可用的回环族地址来模拟 IPv6 关闭:127.0.0.1 明确 ECONNREFUSED → 结论"没人"
+  assert.equal(await endpointAlive(port, 'h', 500, fakeLookup('127.0.0.1')), false);
+  // 掺一个远端不可达地址则必须退回 null(不能因为一个地址拒绝就说端点没了)
+  assert.equal(await endpointAlive(port, 'h', 500, fakeLookup('127.0.0.1', '203.0.113.9')), null);
 });
 
 test('addrServes: lsof 的 `*` 通配必须靠 t 字段(IPv4/IPv6)定族,拿不到就不认', () => {

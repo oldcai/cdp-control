@@ -80,7 +80,7 @@ program.command('kill').description('强制结束 browser.json 指定端口上�
     else if (r.reason === 'broken') console.log('browser.json 配置损坏,无法确定端口,kill 不生效');
     else if (r.reason === 'killed') console.log(`已强制结束浏览器 (端口 ${r.port} 已释放)`);
     else if (r.ok) console.log(`端口 ${r.port} 上没有可归属的浏览器进程,未做任何 kill`);
-    else if (r.reason === 'stillUp') console.log(`端口 ${r.port} 仍有进程在监听,kill 未生效(可能是 Edge 崩溃自启,或该监听不归属于 CDP_HOST=${process.env.CDP_HOST || '127.0.0.1'} 无法确认是我们的浏览器)`);
+    else if (r.reason === 'stillUp') console.log(`端口 ${r.port} 仍有人应答或无法确认已释放,kill 未生效(可能是 Edge 崩溃自启、该监听不归属于 CDP_HOST=${process.env.CDP_HOST || '127.0.0.1'},或 CDP_HOST 非本机、kill 够不着)`);
     else console.log(`端口 ${r.port} 上无浏览器进程`);
   });
 
