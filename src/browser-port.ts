@@ -21,6 +21,10 @@ export class FixedPortLaunchAttempt<Process> {
     this.launched = process;
   }
 
+  release(process: Process): void {
+    if (this.launched === process) this.launched = null;
+  }
+
   cleanup(terminate: (process: Process) => void): void {
     const launched = this.launched;
     this.launched = null;

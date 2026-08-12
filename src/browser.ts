@@ -51,22 +51,25 @@ export interface KillResult {
 
 type BrowserChild = ReturnType<typeof spawn>;
 
-let child: BrowserChild | null = null;
+const lastLaunch = new FixedPortLaunchAttempt<BrowserChild>();
 let configWriteSequence = 0;
 const execFileAsync = promisify(execFile);
 
 function terminateChild(launched: BrowserChild): void {
   try {
+    if (launched.exitCode !== null || launched.signalCode !== null) return;
     if (process.platform === 'win32')
       spawn('taskkill', ['/pid', String(launched.pid), '/T', '/F'], { stdio: 'ignore' });
     else launched.kill('SIGKILL');
-  } catch {}
-  if (child === launched) child = null;
+  } catch {
+  } finally {
+    lastLaunch.release(launched);
+  }
 }
 
 /** 仅在真正开始下一次 spawn 时，结束上一个由本进程启动的句柄。 */
 function killLast(): void {
-  if (child) terminateChild(child);
+  lastLaunch.cleanup(terminateChild);
 }
 
 function launch(exe: string, args: string[], port: number, userData: string): Promise<BrowserChild> {
@@ -77,11 +80,12 @@ function launch(exe: string, args: string[], port: number, userData: string): Pr
       detached: true,
       stdio: 'ignore',
     });
-    child = launched;
+    lastLaunch.record(launched);
+    launched.once('exit', () => lastLaunch.release(launched));
     launched.once('error', error => {
       if (settled) return;
       settled = true;
-      if (child === launched) child = null;
+      lastLaunch.release(launched);
       reject(new Error(`启动浏览器进程失败(${exe}): ${error.message}`, { cause: error }));
     });
     // spawn 的 `'spawn'` 事件证明 OS 已成功创建进程；否则同步返回会把 ENOENT 等真因拖成“启动超时”。
@@ -96,7 +100,7 @@ function launch(exe: string, args: string[], port: number, userData: string): Pr
 
 async function waitReady(
   timeoutMs = 20000,
-  launched: BrowserChild | null = child,
+  launched: BrowserChild | null = lastLaunch.launched,
   assertAuthority?: () => void,
 ): Promise<void> {
   let earlyExit: string | null = null;
@@ -299,6 +303,12 @@ function fixedPortDependencies(assertAuthority?: AuthorityGuard): Omit<FixedPort
   return dependencies;
 }
 
+function recordLaunchAttempt(attempt: FixedPortLaunchAttempt<BrowserChild>, launched: BrowserChild): void {
+  attempt.record(launched);
+  launched.once('exit', () => attempt.release(launched));
+  if (launched.exitCode !== null || launched.signalCode !== null) attempt.release(launched);
+}
+
 function prepareAndLaunch(
   cfg: BrowserConfig,
   assertAuthority: AuthorityGuard,
@@ -307,7 +317,7 @@ function prepareAndLaunch(
   setPort(cfg.port);
   return prepareFixedPort(cfg.port, {
     ...fixedPortDependencies(assertAuthority),
-    launch: async () => attempt.record(await launch(cfg.exe, cfg.args, cfg.port, cfg.userData)),
+    launch: async () => recordLaunchAttempt(attempt, await launch(cfg.exe, cfg.args, cfg.port, cfg.userData)),
   });
 }
 

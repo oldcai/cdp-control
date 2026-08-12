@@ -42,6 +42,12 @@ test('FixedPortLaunchAttempt: 未 spawn 的本轮清理不碰历史进程，reco
   assert.deepEqual(historical, { pid: 401 });
 
   attempt.record(current);
+  attempt.release(historical);
+  assert.equal(attempt.launched, current);
+  attempt.release(current);
+  assert.equal(attempt.launched, null);
+
+  attempt.record(current);
   attempt.cleanup(process => killed.push(process));
   assert.deepEqual(killed, [current]);
   assert.equal(attempt.launched, null);
