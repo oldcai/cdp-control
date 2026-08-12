@@ -95,6 +95,32 @@ export function killListenerPids(pids: number[], killPid: (pid: number) => void)
   return failures;
 }
 
+export type ListenerCleanupPlan =
+  | { action: 'kill'; pids: number[] }
+  | { action: 'noProcess' }
+  | { action: 'stillUp' };
+
+/**
+ * 显式 kill 也必须先证明目标端点确实 busy；否则 IPv6-only wildcard 的保守候选可能被误杀。
+ * 枚举后再核对状态与 PID 快照，端点身份变化时 fail closed。
+ */
+export async function planListenerCleanup(
+  port: number,
+  deps: Pick<FixedPortDependencies, 'portState' | 'listenerPids'>,
+): Promise<ListenerCleanupPlan> {
+  const initialState = await deps.portState(port);
+  if (initialState.state === 'free') return { action: 'noProcess' };
+  if (initialState.state === 'unknown') return { action: 'stillUp' };
+
+  const firstPids = normalizePids(await deps.listenerPids(port));
+  const finalState = await deps.portState(port);
+  if (finalState.state === 'free') return { action: 'noProcess' };
+  if (finalState.state === 'unknown') return { action: 'stillUp' };
+  const finalPids = normalizePids(await deps.listenerPids(port));
+  if (!firstPids.length || !samePids(firstPids, finalPids)) return { action: 'stillUp' };
+  return { action: 'kill', pids: finalPids };
+}
+
 export interface FixedPortDependencies {
   probe(port: number): Promise<ProbeResult>;
   /** 忙端口进入破坏性流程前的有界就绪宽限；运行时用于等待并发冷启动。 */
@@ -204,11 +230,15 @@ async function recheckBeforeLaunch(
 
 async function listenerSnapshot(port: number, deps: FixedPortDependencies): Promise<number[]> {
   try {
-    return [...new Set(await deps.listenerPids(port))].filter(pid => Number.isInteger(pid) && pid > 0);
+    return normalizePids(await deps.listenerPids(port));
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     throw new FixedPortError(`枚举配置端口 ${port} 的 TCP 监听进程失败: ${detail}`, { cause });
   }
+}
+
+function normalizePids(pids: number[]): number[] {
+  return [...new Set(pids)].filter(pid => Number.isInteger(pid) && pid > 0);
 }
 
 function samePids(left: number[], right: number[]): boolean {

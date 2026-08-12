@@ -24,6 +24,7 @@ import {
   parseNetstatListenersForHosts,
   parseLsofListeners,
   parseLsofListenersForHosts,
+  planListenerCleanup,
   socketHost,
   waitForCdpReady,
   type PortState,
@@ -341,7 +342,10 @@ export async function killBrowser(): Promise<KillResult> {
   try { cfg = parseBrowserConfig(readFileSync(p, 'utf8')); }
   catch { return { ok: false, port: 9222, reason: 'broken' }; }
   const port = cfg.port;
-  const pids = await listenerPids(port);
+  const plan = await planListenerCleanup(port, { portState, listenerPids });
+  if (plan.action === 'noProcess') return { ok: true, port, reason: 'noProcess' };
+  if (plan.action === 'stillUp') return { ok: false, port, reason: 'stillUp' };
+  const pids = plan.pids;
   const killFailures = killListenerPids(pids, killPid);
   for (let i = 0; i <= 10; i++) {
     const state = await portState(port);

@@ -16,6 +16,7 @@ import {
   killListenerPids,
   lsofListenerArgs,
   parseLsofListenersForHosts,
+  planListenerCleanup,
   socketHost,
   waitForCdpReady,
 } from '../src/browser-port.ts';
@@ -69,6 +70,16 @@ test('killListenerPids: 单个 listener 结束失败仍尝试其余 PID，并聚
   });
   assert.deepEqual(attempted, [711, 712]);
   assert.deepEqual(failures, ['711: EPERM fixture']);
+});
+
+test('planListenerCleanup: 端点空闲时不枚举、更不误杀另一地址族 wildcard listener', async () => {
+  const calls: string[] = [];
+  const plan = await planListenerCleanup(9222, {
+    portState: async () => { calls.push('state'); return { state: 'free' }; },
+    listenerPids: async () => { calls.push('listeners'); return [888]; },
+  });
+  assert.deepEqual(plan, { action: 'noProcess' });
+  assert.deepEqual(calls, ['state']);
 });
 
 function dependencies(options: {
