@@ -1,6 +1,7 @@
 // browser-config.test.ts — browser.json 解析 + defaultArgs 单测(纯函数)。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { parseBrowserConfig, defaultArgs, browserConfigPath, DEFAULT_PORT, DEFAULT_USER_DATA } from '../src/browser-config.ts';
 
 test('parseBrowserConfig: 合法 JSON 解析(含 port/userData)', () => {
@@ -48,5 +49,13 @@ test('defaultArgs: 通用集 + linux 加 disable-dev-shm-usage', () => {
 });
 
 test('browserConfigPath: 落在 ~/.cdp-control/browser.json', () => {
-  assert.match(browserConfigPath(), /\.cdp-control[\\/]browser\.json$/);
+  assert.match(browserConfigPath({}), /\.cdp-control[\\/]browser\.json$/);
+});
+
+test('CDP_HOME: browser.json、默认 user-data 与配置解析均落在隔离 home', () => {
+  const home = join('tmp', 'isolated-cdp-home');
+  const env = { CDP_HOME: home };
+  assert.equal(browserConfigPath(env), join(home, 'browser.json'));
+  assert.equal(DEFAULT_USER_DATA(env), join(home, 'user-data'));
+  assert.equal(parseBrowserConfig('{ "exe": "/x/msedge.exe" }', env).userData, join(home, 'user-data'));
 });

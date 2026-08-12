@@ -2,7 +2,7 @@
 
 > 面向**开发者**(维护本 skill 源码的人)。**agent 使用本 skill 时只需要 `skills/cdp-control/SKILL.md`**。
 > 运行入口:`cdp-control`(全局命令,`npm link` 后任意目录可调;等效 `node dist/cdp.js`)。
-> 数据归用户目录:`rulesDir()`→`~/.cdp-control/rules`(本机符号链接指向 `rules/`),浏览器用户数据→`~/.cdp-control/user-data`。
+> 数据默认归 `~/.cdp-control`(`CDP_HOME` 可整体覆盖):`rulesDir()`→`<CDP_HOME>/rules`(本机默认路径是指向 `rules/` 的符号链接),浏览器用户数据→`<CDP_HOME>/user-data`。
 
 ## 构建
 
@@ -16,7 +16,7 @@ npm run build    # tsc --noEmit + esbuild(编译 + 打包注入脚本)
 npm test         # node:test 跑 tests/*.test.ts(零运行时依赖)
 ```
 
-实时规则目录 = `~/.cdp-control/rules`(数据 home):本机它是**符号链接指向 `rules/`**(用户规则=根本规则,运行时读写直接落 git 工作树的 rules,**无覆盖问题**);干净环境是真目录,`rules-store.ts` seed-once 缺文件时从 `rules/` 拷默认。**build 不清不覆盖**(修 clobber)。
+实时规则目录 = `<CDP_HOME>/rules`(默认 `~/.cdp-control/rules`):本机默认路径是**符号链接指向 `rules/`**(用户规则=根本规则,运行时读写直接落 git 工作树的 rules,**无覆盖问题**);干净环境是真目录,`rules-store.ts` seed-once 缺文件时从 `rules/` 拷默认。**build 不清不覆盖**(修 clobber)。
 
 产物:
 ```
@@ -25,7 +25,7 @@ dist/*.js            其余 Node 侧(api/transport/monitor/browser/inject-loader
 dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 IIFE)
 ```
 
-**规则是数据非代码,不住 dist**:统一住 `~/.cdp-control/rules`(用户本机符号链接到 `rules/`,规则即根本、运行时读写直接入库),内置默认在 `rules/`(入库,publish 随包),干净环境由 `rules-store.ts` seed-once 拷贝。fold/ignore-links/recipe 全部经此(见「规则存储」)。
+**规则是数据非代码,不住 dist**:fold/ignore-links 运行时可写数据住 `<CDP_HOME>/rules`(默认 `~/.cdp-control/rules`;本机默认路径符号链接到 `rules/`),内置默认在 `rules/`(入库,publish 随包),干净环境由 `rules-store.ts` seed-once 拷贝;recipe 作者代码则直接读包/仓库 `rules/recipes/`,不做数据 home 镜像(见「规则存储」)。
 
 **全局 CLI(`npm link`)**:`package.json` 的 `bin.cdp-control` → `dist/cdp.js`(首行 shebang 由 `build.mjs` 给 cdp bundle 加 banner,只加这一次、勿配到 standalone/inject 产物)。`npm link` 后任意目录可敲 `cdp-control`;SKILL.md 全用此命令。`private:true` 不影响 npm link;publish 前翻 private + `files:["dist","rules","skills"]`。
 
@@ -42,14 +42,16 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 
 ## 浏览器连接(ensureBrowser / kill)
 
-- **端口与用户数据路径入配置**:`browser.json` 的 `port`(默认 9222)与 `userData`(默认 `~/.cdp-control/user-data`)用户可改。`ensureBrowser()` 读配置后 `transport.setPort(cfg.port)` 同步端口,所有命令连该端口。`CDP_PORT` env 仅无配置时兜底默认。语义:**已就绪**(配置端口有响应)→ 直接用,就绪零开销(读配置 + 1 次 GET `/json/version`,顺带拿浏览器名);**未就绪** → 读 `~/.cdp-control/browser.json` 拉起(缺失自动发现生成 / 存在则用 / 损坏警告不兜底 / 用户可改)。
-- **启动配置 `~/.cdp-control/browser.json`**(用户可编辑,权威):`{ exe, kind, args, port, userData }`。`args` 存稳定参数(remote-allow-origins/no-first-run/window-size 等);`--remote-debugging-port` 与 `--user-data-dir` 由工具据 `port`/`userData` 生成。缺失时 bootstrap 用 `browser-discover.ts` 跨平台候选(Edge 优先)首个能拉起者原子写配置;损坏(JSON 非法/exe 不存在/args 非数组/显式 port 非法)打印清晰错误、**不 fallback**,用户改文件。原子写(tmp+rename)。
+- **数据 home 与测试隔离**:默认数据 home 是 `~/.cdp-control`;受支持的 `CDP_HOME=<dir>` 可把 `browser.json`、默认 `user-data/` 与 `rules/` 整体切到另一目录,供集成测试/多实例完全隔离。`CDP_RULES_DIR` 仍是规则目录的更高优先级单项覆盖。
+- **连接专用模式**:`CDP_NO_AUTOSTART=1` 时 `ensureBrowser()` 仍会正常复用已就绪端点,但端点不就绪就清晰报错、不 cold-start detached 浏览器/daemon。集成 harness 依此保证只存在它自己 spawn 并记录 PID 的浏览器。
+- **端口与用户数据路径入配置**:`browser.json` 的 `port`(默认 9222)与 `userData`(默认 `<CDP_HOME>/user-data`)用户可改。`ensureBrowser()` 读配置后 `transport.setPort(cfg.port)` 同步端口,所有命令连该端口。`CDP_PORT` env 仅无配置时兜底默认。语义:**已就绪**(配置端口有响应)→ 直接用,就绪零开销(读配置 + 1 次 GET `/json/version`,顺带拿浏览器名);**未就绪** → 读 `<CDP_HOME>/browser.json` 拉起(缺失自动发现生成 / 存在则用 / 损坏警告不兜底 / 用户可改)。
+- **启动配置 `<CDP_HOME>/browser.json`**(用户可编辑,权威):`{ exe, kind, args, port, userData }`。`args` 存稳定参数(remote-allow-origins/no-first-run/window-size 等);`--remote-debugging-port` 与 `--user-data-dir` 由工具据 `port`/`userData` 生成。缺失时 bootstrap 用 `browser-discover.ts` 跨平台候选(Edge 优先)首个能拉起者原子写配置;损坏(JSON 非法/exe 不存在/args 非数组/显式 port 非法)打印清晰错误、**不 fallback**,用户改文件。原子写(tmp+rename)。
 - **跨平台发现 `browser-discover.ts`**(纯函数):win env 路径表(Edge/Chrome 各通道)+`where`;mac 硬编码精确 `.app`+`Contents/MacOS/<bin>`(Safari 排除);linux `command -v` + `.desktop`。
 - **配置解析 `browser-config.ts`**(纯函数):`parseBrowserConfig`(port/userData 缺省取默认,损坏抛清晰错)/`defaultArgs`(linux 加 `--disable-dev-shm-usage`)/`browserConfigPath`/`DEFAULT_PORT`/`DEFAULT_USER_DATA`。
 - **端口被占自动改口(`port.ts`)**:启动前先 `portFree(port)` 探 `127.0.0.1:<port>` 能否绑定;被别的进程占着(常见:用户自己手动开、带 remote-debugging 的另一个浏览器)则 `findFreePort(port+1)` 换口——**必须换**:Chrome 绑不上 IPv4 时**不报错退出**,而是静默退到 `[::1]:<port>`,客户端连 `127.0.0.1` 永远拿不到 `/json/version`,表现为"启动超时/未找到可用浏览器"(2026-08 m2 实测)。有配置则把新端口**回写 browser.json**(下次直接对);bootstrap 则写进新配置。走到 coldStart 说明占用者不是可用 CDP 端点(否则 `probeReady` 早命中直接复用)。**`launchReady` 再兜一层**:端口上浏览器没就绪(20s)就换个空闲口重试一次——`portFree` 是"能不能 bind"的探测,posix 上准,win 上占用方用了 `SO_REUSEADDR` 时可能漏检,重试把平台差异抹平。全流程无平台分支,win/mac/linux 同一条路径。
 - **冷启动**:`spawn(exe, [...args, --remote-debugging-port=<cfg.port>, --user-data-dir=<cfg.userData>], {detached:true, stdio:'ignore'}).unref()` → 轮询 `/json/version` 就绪(20s)→ `maybeSpawnDaemon`。浏览器不随父进程死(持久)。bootstrap 全候选失败时区分两种错:**一个候选都不存在**(未装浏览器)vs **存在但没在端口上就绪**(列出试过谁)。
 - **"一切命令自愈"**:`api.resolve/list/open` 前置 `ensureBrowser()`(幂等)→ 所有 target 命令与 list/open 未起自动启动;`transport.evaluate` 由 api 的 `connectTarget` 包一层——连接失败(浏览器死/target stale)→ ensure + 按 url 重 resolve + 重试一次(堵 run 脚本直传 stale target);daemon(走 `pageWs`/`send`)天然豁免,不会死循环拉起浏览器。
-- **`kill` 命令**:`cdp-control kill` 从 `browser.json` 读 `port`(**不**用默认 9222);**无配置 → kill 不生效**。找监听进程(netstat/lsof → pid)→ taskkill `/F /T`/SIGKILL → 等端口释放(Edge 崩溃自启会重绑,等待确认)。daemon 经 `spawnDaemon` 以 `env.CDP_PORT = transport.PORT` 拉起,端口由 ensureBrowser 从配置同步。
+- **`kill` 命令**:`cdp-control kill` 从 `<CDP_HOME>/browser.json` 读 `port`(**不**用默认 9222);**无配置 → kill 不生效**。找监听进程(netstat/lsof → pid)→ taskkill `/F /T`/SIGKILL → 等端口释放(Edge 崩溃自启会重绑,等待确认)。daemon 经 `spawnDaemon` 以 `env.CDP_PORT = transport.PORT` 拉起,端口由 ensureBrowser 从配置同步。
 
 ## 注入脚本契约(改动注入脚本必读)
 
@@ -109,9 +111,9 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 
 ### 规则存储(rules-store)+ url-scope
 **规则分两种生命周期、两处存储**:
-- **运行时可写数据**(fold.csv/ignore-links.csv):住 `~/.cdp-control/rules`(数据 home)。本机是符号链接指向 `rules/`(规则=根本,读写直落 git 工作树,无覆盖);干净环境是真目录,`rules-store.ts` **seed-once** 缺文件时从 `rules/` 拷默认(已存在不覆盖,修旧 clobber bug)。
+- **运行时可写数据**(fold.csv/ignore-links.csv):住 `<CDP_HOME>/rules`(数据 home;默认 `~/.cdp-control/rules`)。本机默认 home 中它是符号链接指向 `rules/`(规则=根本,读写直落 git 工作树,无覆盖);干净环境是真目录,`rules-store.ts` **seed-once** 缺文件时从 `rules/` 拷默认(已存在不覆盖,修旧 clobber bug)。
 - **作者代码(recipe)**:`rules/recipes/*.js` **直接读 git 权威**、不做 gitignored 镜像(曾 seed 到 `rules/recipes/` 双份手动同步必然漂移,2026-08 实测 `_lib.js` 差 22 字节)。recipe-runner 扫 `srcRecipesDir()`(经 `CDP_RULES_DEFAULT_DIR` 覆盖)。
-`rulesDir()` 默认 `join(homedir(), '.cdp-control', 'rules')`;测试用 `CDP_RULES_DIR`/`CDP_RULES_DEFAULT_DIR` 覆盖(recipe 测试用后者指临时目录)。
+`rulesDir()` 默认 `<CDP_HOME>/rules`(`CDP_HOME` 未设时即 `~/.cdp-control/rules`);`CDP_RULES_DIR` 仍可单独高优先级覆盖,测试另可用 `CDP_RULES_DEFAULT_DIR` 覆盖默认规则源(recipe 测试用后者指临时目录)。
 **共享工具 `src/url-scope.ts`**(纯函数零依赖):`globToRegExp`(唯一实现,消 3 份重复)+ `hostOf`/`pathOf` + `urlMatches`。fold 用 hostOf/pathOf 拆两维正交;ignore-links 用拼接串单 glob;recipe 作用域用 urlMatches。
 
 ### recipe(站点抽取配方)
@@ -168,6 +170,8 @@ Node 侧统一 `invoke(target, expr)` 执行注入脚本并解包:成功返回�
 ## 测试
 
 - `tests/*.test.ts` 用 Node 内置 `node:test`+`node:assert/strict`,零运行时依赖。
+- `npm run test:integration` 先重建 `dist/` 并用 `tsconfig.integration.json` 类型检查 harness,再用 `tests/integration/*.test.ts` 启动 `node:http` 本地 fixture 与隔离的 `--headless=new` 真浏览器;所有驱动命令均是 `node dist/cdp.js <args>`。harness 用项目 `tmp/` 下的临时 `CDP_HOME`、`CDP_NO_AUTOSTART=1`、≥40000 的动态 CDP 端口和随机 fixture 端口,只按自己记录的 PID/进程组清理;无可用浏览器时显式打印 `SKIPPED` 并退出 0。
+- 集成覆盖:`view` 的 ref/value/语义状态、`find --text` 追加 ref、坐标 `click`+变更反馈、`fill` value 回显、持久 fold、DOM 删除后 refInvalid/recovered、`article` Markdown、selector 未命中的非零错误路径。
 - 纯函数单测:`view-utils.ts`、`view-format.ts`(formatView/markText)、`genSel.ts`、`find-root.ts`(refElement/climbAncestors/classifyRef)、`ref-registry.test.ts`(WeakRef 形态/复号追加/parentRef 刷新/WeakMap 只查)、`click-position.ts`(中心可用性/跨 shadow 命中链)、`click-events.ts`(moved/pressed/released 顺序与参数)、`folds.ts`(parseRules/domainMatch/pathMatch/matchFolds/loadFolds,临时 CDP_FOLD_FILE)、`ignore-links.ts`(hrefForMatch/globToRegExp/linkRuleMatch/parseLinkRules + 浏览器侧 linkIgnored)、`target-arg.ts`(normArg 防呆)、`keys.ts`(parseKeySpec)、`transport.ts`(resolveTarget)、`port.ts`(portFree/findFreePort,真实 bind 高位端口不 mock)。
 - 注入侧 DOM 相关(buildView/fold/inputInfo/state、find-entry 穿透 shadow、feedback observer/子树黑名单、recoverRef live 分支)依赖真实 DOM,靠浏览器实测(见 SKILL.md),不写单测。纯函数分支(`formatView` 的 `·屏`/状态/shadow 占位/fold 优先/`inputAttr`、`feedback` 的 `foldTimestampRun`/class 差集/属性限量)有单测。
 

@@ -9,7 +9,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensureRules, foldsLivePath, linksLivePath } from '../src/rules-store.ts';
+import { ensureRules, foldsLivePath, linksLivePath, rulesDir } from '../src/rules-store.ts';
 
 // strip-types(ESM)下无 __dirname,默认源用 CDP_RULES_DEFAULT_DIR 指到真实根 rules/。
 const DEFAULT_RULES = join(dirname(fileURLToPath(import.meta.url)), '..', 'rules');
@@ -22,8 +22,10 @@ function withRulesDir<T>(fn: (dir: string) => T): T {
   process.env.CDP_RULES_DEFAULT_DIR = DEFAULT_RULES;
   try { return fn(dir); }
   finally {
-    process.env.CDP_RULES_DIR = prev;
-    process.env.CDP_RULES_DEFAULT_DIR = prevD;
+    if (prev === undefined) delete process.env.CDP_RULES_DIR;
+    else process.env.CDP_RULES_DIR = prev;
+    if (prevD === undefined) delete process.env.CDP_RULES_DEFAULT_DIR;
+    else process.env.CDP_RULES_DEFAULT_DIR = prevD;
     rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -50,3 +52,12 @@ test('seed-once: 已有文件不被覆盖(修 clobber)', () => {
   });
 });
 
+test('rulesDir: 默认跟随 CDP_HOME,CDP_RULES_DIR 保持最高优先级', () => {
+  const home = join('tmp', 'isolated-cdp-home');
+  const explicitRules = join('tmp', 'explicit-rules');
+  assert.equal(rulesDir({ CDP_HOME: home }), join(home, 'rules'));
+  assert.equal(
+    rulesDir({ CDP_HOME: home, CDP_RULES_DIR: explicitRules }),
+    explicitRules,
+  );
+});

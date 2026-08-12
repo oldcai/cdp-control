@@ -158,6 +158,33 @@ targetCmd('view', '感知:命中 recipe 输出站点摘要,否则整页结构树
     console.log((d.recipe ? RECIPE_LEGEND : VIEW_LEGEND) + '\n' + d.lines.join('\n'));
   });
 
+interface FindCliOptions {
+  target?: string;
+  text?: string;
+  selector?: string;
+  ancestor?: string;
+  all?: boolean;
+}
+
+interface FindCliHit { ref: number; line: string }
+
+targetCmd('find', '按文本或 selector 找元素并登记新 ref(不必重新读整棵树)')
+  .option('--text <关键词>', '搜索自身直接文本包含关键词的元素(穿透 shadow)')
+  .option('--selector <css>', '按 CSS selector 命中(支持 `>>>` shadow 链)')
+  .option('--ancestor <n>', '命中后向上爬 N 层到区域容器(默认 0)')
+  .option('--all', '返回全部命中并分别登记 ref(默认仅首个)')
+  .action(async (opts: FindCliOptions) => {
+    if (!opts.text && !opts.selector) throw new Error('需提供 --text 或 --selector');
+    if (opts.text && opts.selector) throw new Error('--text 与 --selector 只能选其一');
+    const r = await api.find(await needTarget(opts.target), {
+      text: opts.text,
+      selector: opts.selector,
+      ancestor: opts.ancestor != null ? Number(opts.ancestor) : undefined,
+      all: !!opts.all,
+    }) as { hits?: FindCliHit[] };
+    for (const hit of r.hits || []) console.log(hit.line);
+  });
+
 // 操作目标:位置参数 <target> 全数字→ref(配 --ancestor),否则视为 selector。见 api.TargetArg。
 function normTarget(t: string, ancestor: string | number | undefined): string | { ref: number; ancestor?: number } {
   if (/^\d+$/.test(t)) return { ref: Number(t), ancestor: ancestor != null ? Number(ancestor) : undefined };

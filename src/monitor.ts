@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { pageWs, send, listTargets, resolve, evaluate, sleep, PORT, Target } from './transport';
 import { inject, readExpr } from './inject-loader';
+import { cdpNoAutostart } from './paths.ts';
 
 export const LOGS_PORT = Number(process.env.CDP_LOGS_PORT) || 9333;
 
@@ -29,6 +30,7 @@ export async function daemonHealthy(port = LOGS_PORT): Promise<boolean> {
 
 // 异步确保 daemon 在跑(打开页面时自动注入守护;失败不阻塞主流程)。
 export async function maybeSpawnDaemon(): Promise<void> {
+  if (cdpNoAutostart()) return;
   try { await ensureDaemon(); } catch {}
 }
 
