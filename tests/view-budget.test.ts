@@ -323,3 +323,25 @@ test('renderBudgetedView: 深链仅轻微超预算时规划不应重复穷举同
   assert.ok(result.foldedRefs.length > 0, '基线+账单应刚好超预算并触发规划');
   assert.ok(elapsedMs < 3000, `100 层轻微超预算耗时 ${Math.round(elapsedMs)}ms，同一 target 子问题必须复用`);
 });
+
+test('renderBudgetedView: 深层分支树不应为大子树传播指数个不同 target', () => {
+  const levels = 150;
+  let current = textNode(10_000, '甲'.repeat(400));
+  for (let level = levels; level >= 1; level--) {
+    const sibling = textNode(level, '乙'.repeat(50 + level * 7));
+    current = mk({
+      tag: 'div',
+      budgetRef: 1000 + level,
+      kids: [sibling, current],
+      size: current.size + 2,
+    });
+  }
+  const root = prepare(mk({ tag: 'body', kids: [current], size: current.size + 1 }));
+
+  const started = performance.now();
+  const result = renderBudgetedView(root, 51_750);
+  const elapsedMs = performance.now() - started;
+
+  assert.equal(result.withinBudget, true);
+  assert.ok(elapsedMs < 1000, `150 层分支树耗时 ${Math.round(elapsedMs)}ms，规划应保持有界`);
+});
