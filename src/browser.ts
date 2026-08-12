@@ -24,6 +24,7 @@ import {
   parseNetstatListenersForHosts,
   parseLsofListeners,
   parseLsofListenersForHosts,
+  socketHost,
   waitForCdpReady,
   type PortState,
 } from './browser-port';
@@ -148,7 +149,7 @@ async function portState(port: number): Promise<PortState> {
 
 function connectState(port: number): Promise<PortState> {
   return new Promise(resolve => {
-    const socket = connect({ port, host: HOST });
+    const socket = connect({ port, host: socketHost(HOST) });
     let settled = false;
     const finish = (state: PortState) => {
       if (settled) return;
@@ -186,7 +187,7 @@ function bindState(port: number): Promise<PortState> {
     server.once('listening', () => server.close(error => finish(error
       ? { state: 'unknown', reason: `close bind probe ${HOST}:${port} ${error.message}` }
       : { state: 'free' })));
-    server.listen({ port, host: HOST, exclusive: true });
+    server.listen({ port, host: socketHost(HOST), exclusive: true });
   });
 }
 

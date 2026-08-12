@@ -16,6 +16,7 @@ import {
   killListenerPids,
   lsofListenerArgs,
   parseLsofListenersForHosts,
+  socketHost,
   waitForCdpReady,
 } from '../src/browser-port.ts';
 
@@ -29,6 +30,11 @@ test('hasCdpWebSocket: 只接受非空 ws/wss URL，普通 truthy 值不算健�
 
 test('lsofListenerArgs: POSIX 枚举只请求精确 TCP LISTEN，不会收客户端连接或 UDP', () => {
   assert.deepEqual(lsofListenerArgs(9222), ['-nP', '-iTCP:9222', '-sTCP:LISTEN', '-Fpnt']);
+});
+
+test('socketHost: bracketed IPv6 仅 URL 保留括号，socket bind/connect 使用裸地址', () => {
+  assert.equal(socketHost('[::1]'), '::1');
+  assert.equal(socketHost('127.0.0.1'), '127.0.0.1');
 });
 
 test('waitForCdpReady: 子进程早退后仍有界复探，并复用并发启动成功的 CDP', async () => {

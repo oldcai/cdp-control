@@ -25,6 +25,11 @@ export function lsofListenerArgs(port: number): string[] {
   return ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpnt'];
 }
 
+/** HTTP URL 中 IPv6 需要括号，Node socket API 则必须使用裸地址。 */
+export function socketHost(host: string): string {
+  return host.trim().replace(/^\[([^\]]+)\]$/, '$1');
+}
+
 export interface CdpReadyWaitDependencies {
   probe(timeoutMs: number): Promise<boolean>;
   exitReason(): string | null;
