@@ -18,6 +18,7 @@ import {
   parseBrowserConfig,
   defaultArgs,
   effectiveBrowserPort,
+  reloadBrowserAuthority,
   DEFAULT_PORT,
   DEFAULT_USER_DATA,
   type BrowserConfig,
@@ -305,6 +306,26 @@ function loadConfigOrNull(): BrowserConfig | null {
   return cfg;
 }
 
+/**
+ * 每次探活后重读配置；端口若在请求期间变化，就切到新权威端口重新探活。
+ * 只有一次探活前后的权威端口一致，调用方才可复用结果或进入回收/启动流程。
+ */
+async function probeAuthoritativeConfig(): Promise<{
+  config: BrowserConfig | null;
+  probe: Awaited<ReturnType<typeof probeReady>>;
+}> {
+  let config = loadConfigOrNull();
+  for (let changeCount = 0; changeCount <= 3; changeCount++) {
+    const observedPort = effectiveBrowserPort(config);
+    setPort(observedPort);
+    const probe = await probeReady();
+    const authority = reloadBrowserAuthority(observedPort, loadConfigOrNull, setPort);
+    config = authority.config;
+    if (!authority.portChanged) return { config, probe };
+  }
+  throw new FixedPortError('browser.json 的权威端口在探活期间持续变化，拒绝执行浏览器回收或启动');
+}
+
 type ColdStartResult =
   | { kind: BrowserKind; exe: string; userData: string }
   | { reused: true; browser?: string; userData: string };
@@ -368,18 +389,18 @@ async function coldStart(cfg: BrowserConfig | null): Promise<ColdStartResult> {
 
 /** 确保有 CDP 浏览器在跑:就绪零开销(1 GET);未就绪自动拉起。 */
 export async function ensureBrowser(): Promise<EnsureResult> {
-  // 无配置也必须把 transport 恢复到权威默认 9222，不能继承 CDP_PORT 等漂移值。
-  let cfg: BrowserConfig | null;
+  // 探活前后都重读权威配置；无配置时固定 9222，不能继承 CDP_PORT 等漂移值。
+  let state: Awaited<ReturnType<typeof probeAuthoritativeConfig>>;
   try {
-    cfg = loadConfigOrNull();
+    state = await probeAuthoritativeConfig();
   } catch (cause) {
+    if (cause instanceof FixedPortError) throw cause;
     const detail = cause instanceof Error ? cause.message : String(cause);
     throw new Error(`${detail}\n浏览器启动配置损坏,不做兜底,请编辑 ${browserConfigPath()}`, { cause });
   }
-  setPort(effectiveBrowserPort(cfg));
+  const cfg = state.config;
   if (cfg?.userData) mkdirSync(cfg.userData, { recursive: true });
-  const probe = await probeReady();
-  if (probe.ready) return { ready: true, started: false, browser: probe.browser, userData: cfg?.userData };
+  if (state.probe.ready) return { ready: true, started: false, browser: state.probe.browser, userData: cfg?.userData };
   // 集成 harness/连接专用模式必须保持进程所有权：端点掉线就报错，不拉起 detached 浏览器/daemon。
   if (cdpNoAutostart()) {
     throw new Error(`CDP_NO_AUTOSTART=1: 端点 ${HOST}:${Number(PORT)} 未就绪，拒绝自动启动浏览器`);

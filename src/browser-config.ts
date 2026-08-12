@@ -26,6 +26,24 @@ export function effectiveBrowserPort(config: Pick<BrowserConfig, 'port'> | null)
   return config?.port ?? DEFAULT_PORT;
 }
 
+export interface BrowserAuthority {
+  config: BrowserConfig | null;
+  port: number;
+  portChanged: boolean;
+}
+
+/** 探活结束后重读配置并立即同步端口，供破坏性流程确认仍使用最新权威值。 */
+export function reloadBrowserAuthority(
+  observedPort: number,
+  load: () => BrowserConfig | null,
+  syncPort: (port: number) => void,
+): BrowserAuthority {
+  const config = load();
+  const port = effectiveBrowserPort(config);
+  syncPort(port);
+  return { config, port, portChanged: port !== observedPort };
+}
+
 const KINDS: BrowserKind[] = ['edge', 'chrome', 'chromium', 'brave', 'arc'];
 
 function isBrowserKind(value: unknown): value is BrowserKind {
