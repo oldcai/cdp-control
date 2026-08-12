@@ -435,6 +435,27 @@ test('killListenerPids: 单个 listener 结束失败仍尝试其余 PID，并聚
   assert.deepEqual(failures, ['711: EPERM fixture']);
 });
 
+test('planListenerCleanup: 异步地址复核后权威改口则不得返回 noProcess', async () => {
+  const authorityChanged = new Error('authority changed after kill address-set fixture');
+  let authoritative = true;
+  let addressChecks = 0;
+  await assert.rejects(
+    () =>
+      planListenerCleanup(9222, {
+        assertAuthority: () => {
+          if (!authoritative) throw authorityChanged;
+        },
+        assertAddressSet: async () => {
+          addressChecks += 1;
+          if (addressChecks >= 2) authoritative = false;
+        },
+        portState: async () => ({ state: 'free' }),
+        listenerPids: async () => [888],
+      }),
+    error => error === authorityChanged,
+  );
+});
+
 test('planListenerCleanup: 端点空闲时不枚举、更不误杀另一地址族 wildcard listener', async () => {
   const calls: string[] = [];
   const plan = await planListenerCleanup(9222, {
