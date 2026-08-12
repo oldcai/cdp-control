@@ -12,6 +12,7 @@ import { maybeSpawnDaemon } from './monitor';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
 import { browserConfigPath, parseBrowserConfig, defaultArgs, DEFAULT_PORT, DEFAULT_USER_DATA, type BrowserConfig } from './browser-config';
 import { portFreeOn, findFreePort, endpointAlive, parseNetstatListeners, parseLsofListeners } from './port';
+import { cdpNoAutostart } from './paths.ts';
 
 export interface EnsureResult { ready: boolean; started: boolean; browser?: string; userData?: string; }
 /** coldStart 结果:自己拉起来的浏览器,或"并发进程已拉起、直接复用"。 */
@@ -224,6 +225,11 @@ export async function ensureBrowser(): Promise<EnsureResult> {
   let busyProbed: number | null = null;
   if (!probe.ready && !(await portFreeOn(probed, HOST))) { busyProbed = probed; probe = await probeReadySoon(); }
   if (probe.ready) return { ready: true, started: false, browser: probe.browser, userData: cfg?.userData };
+  // 集成 harness/连接专用模式必须保持进程所有权：端点掉线就报错，不在短命 CLI
+  // 里拉起 detached 浏览器/daemon（否则调用方拿不到 PID，失败清理会漏进程）。
+  if (cdpNoAutostart()) {
+    throw new Error(`CDP_NO_AUTOSTART=1: 端点 ${HOST}:${probed} 未就绪，拒绝自动启动浏览器`);
+  }
   // 端口"刚才空、进 coldStart 前被并发进程绑上"的 TOCTOU 窗口由 pickPort 兜住(那个端口没被确认占用时它会再等一轮)
   const info = await coldStart(busyProbed);
   if ('reused' in info) return { ready: true, started: false, browser: info.reused, userData: cfg?.userData };

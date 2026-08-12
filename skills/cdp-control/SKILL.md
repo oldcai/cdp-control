@@ -1,6 +1,6 @@
 ---
 name: cdp-control
-description: 控制本地浏览器——列出/打开/关闭/导航页面、提取元素、点击、填表、执行 JS、截图、读控制台日志。自动化优先写成脚本用 `run` 一次执行。核心模型:view 感知页面(命中站点 recipe 输出聚焦摘要,否则整页文本+结构紧凑树,生成可操作 ref),ref 是操作索引(会话句柄)。首屏外没加载(如评论区)用 `view --scroll-to-load` 先滚动再建树。任何用 ref 的命令失效自动自愈。长页噪声用 fold 持久规则(手动编辑 `~/.cdp-control/rules/fold.csv`,类 uBlock);已知站点聚焦摘要用 `~/.cdp-control/rules/recipes/` 站点 recipe。
+description: 控制本地浏览器——列出/打开/关闭/导航页面、提取元素、点击、填表、执行 JS、截图、读控制台日志。自动化优先写成脚本用 `run` 一次执行。核心模型:view 感知页面(命中站点 recipe 输出聚焦摘要,否则整页文本+结构紧凑树,生成可操作 ref),ref 是操作索引(会话句柄)。首屏外没加载(如评论区)用 `view --scroll-to-load` 先滚动再建树。任何用 ref 的命令失效自动自愈。长页噪声用 fold 持久规则(手动编辑 `<CDP_HOME>/rules/fold.csv`,类 uBlock);已知站点聚焦摘要用包/仓库 `rules/recipes/` 站点 recipe。
 ---
 
 # CDP 浏览器控制
@@ -15,7 +15,7 @@ description: 控制本地浏览器——列出/打开/关闭/导航页面、提�
 - `list`/`open` 自动确保浏览器就绪(CDP 未起自动启动)。
 - **首次看页面必须完整 `view`**(别 `| head`,别 `--visible-only`);view 输出**严禁 head/sed/grep 过滤**,局部只能用 `view <ref>`/`--ancestor/--selector-file/--visible-only`。
 - **裸 `view` 命中站点 recipe 会输出聚焦摘要而非整页树**——已知站点(如知乎)这是想要的聚焦版;要整页结构用 `view --tree`(或任何建树意图)。
-- 定位一律从 view 已有 ref 出发,**严禁 JS eval 探查 DOM**;要 selector(如写 fold 规则)手动写。
+- 首次先完整 view 建树;之后按已知文本/selector 增量重定位可用 `find`,**严禁 JS eval 探查 DOM**;要 selector(如写 fold 规则)手动写。
 - 多步交互写成 `.js` 脚本用 `run` 一次执行,省模型往返。
 
 ## When to Use
@@ -29,7 +29,7 @@ cdp-control <子命令> [参数]
 cdp-control run "./scripts/你的脚本.js"
 ```
 
-浏览器就绪:CDP 未起则自动探测默认浏览器(优先 Edge,其次 Chrome),独立用户数据目录启动(默认 `~/.cdp-control/user-data`,`CDP_USER_DATA` 覆盖),轮询等 ready(≤15s)。冷启动复用首个空白 tab,热启动新开 tab。
+浏览器就绪:CDP 未起则自动探测默认浏览器(优先 Edge,其次 Chrome),用 `<CDP_HOME>/user-data`(默认 `~/.cdp-control/user-data`;也可在 `<CDP_HOME>/browser.json` 里单独改 `userData`),轮询等 ready(≤20s)。
 
 **脚本放置**:写到**当前项目根**(或 `scripts`/`tmp`),用 `cdp-control run <文件>` 在项目根运行(`run` 的读写以 cwd 为基准,输出落项目根)。脚本环境只有全局 `cdp` + 白名单 `require`(`os/path/fs/child_process/crypto/util/stream/url`);临时路径用 `path.join(os.tmpdir(), name)`,勿用 `/tmp/xx`(Windows 解析成盘根 ENOENT)。
 
@@ -117,6 +117,7 @@ cdp-control run "./scripts/你的脚本.js"
 | `navigate <url>` | 导航 |
 | `eval "<js>"` | 执行 JS,返回 returnByValue 值 |
 | `view [<ref>] [--tree] [...]` | 感知:裸 `view`(无建树意图)命中站点 recipe 就输出聚焦摘要;否则整页文本+结构紧凑树。`--tree`/`[<ref>]`/`--selector-file`/`--visible-only`/`--scroll-*` 任一都**强制树**。首次必须完整 view(禁 --visible-only/截断)。命中 fold 规则输出 `▸ [ref=i] <备注>`;视区标 `[ref=i·屏]`;INPUT/TEXTAREA 显示 `[type=... value="..." placeholder="..."]` |
+| `find --text <关键词>` / `find --selector <css>` | 不重读整树地找元素,命中后复用或追加登记 ref;`--all` 返回全部命中 |
 | `click <target> [--ancestor <k>] [--dom] [--no-feedback] [--feedback-delay <ms>]` | 默认坐标真实点击(target 全数字=ref 否则 selector,穿透 shadow);`--dom` 显式合成。默认带反馈 |
 | `fill <target> <值> [--ancestor <k>] [...]` | 填输入框并派发 input/change。默认带反馈 |
 | `focus <target> [--ancestor <k>] [...]` | 聚焦元素。默认带反馈 |
@@ -129,7 +130,7 @@ cdp-control run "./scripts/你的脚本.js"
 | `logs [--level error,warn] [--since <ms>] [--json]` | 读控制台日志 |
 | `run <脚本文件>` | 执行自动化脚本(全局 `cdp` API,可顶层 await;**返回非 undefined 则打印**) |
 
-环境变量:`CDP_HOST`/`CDP_PORT`(默认 `127.0.0.1:9222`)、`CDP_LOGS_PORT`(daemon,默认 9333)、`CDP_USER_DATA`(默认 `~/.cdp-control/user-data`)、`CDP_RULES_DIR`(实时规则目录,默认 `~/.cdp-control/rules`)、`CDP_FOLD_FILE`/`CDP_IGNORE_LINKS_FILE`(单文件路径覆盖,测试用)。
+环境变量:`CDP_HOME`(整体覆盖 `browser.json`/`user-data`/`rules`,默认 `~/.cdp-control`)、`CDP_HOST`/`CDP_PORT`(默认 `127.0.0.1:9222`)、`CDP_NO_AUTOSTART=1`(端点不就绪时只报错、不冷启动)、`CDP_LOGS_PORT`(daemon,默认 9333)、`CDP_RULES_DIR`(实时规则目录的更高优先级覆盖)、`CDP_FOLD_FILE`/`CDP_IGNORE_LINKS_FILE`(单文件路径覆盖,测试用)。
 
 **recipe 编写**:`rules/recipes/<site>.js`(作者代码直接住 git,单一来源)一文件一站点,导出**规则数组** `module.exports = [{ name, scope: '<hostname+pathname glob>', async extract(cdp, ctx) { … return { lines: [文本行(可内嵌 [ref=N])] }; } }, …]`。`scope` 可为字符串或数组(一抽取服务多 URL 形态);同文件多元素=同站点多布局。`extract` 内可用完整 `cdp` api(`cdp.view` 拿树与 ref、`cdp.article` 取正文、`cdp.read` 展开再读、`cdp.eval` 按站点 selector 抓结构)。**三个引擎原语替你接管可复用/易错部分**:
 - **只读探针 `window.__cdpProbe`**(view 建树后自动注入):eval 里 `const { refOf, text } = window.__cdpProbe`,`refOf(el)` 反查已建树 ref(未命中 `null`,绝不按需注册)。不再手抄 refOf 样板。
