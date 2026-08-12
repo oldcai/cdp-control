@@ -85,7 +85,7 @@ test('probeDaemonHealth: legacy 只认精确旧 schema 与非负整数 targets',
       ensureDaemonReady(19333, expected, {
         fetchImpl: fakeFetch,
         pollAttempts: 1,
-        retireLegacyImpl: async () => {
+        retireDaemonImpl: async () => {
           calls.push('retire');
         },
         sleepImpl: async () => {
@@ -119,7 +119,7 @@ test('probeDaemonHealth: health redirect 是可达 foreign,不跟随到 legacy J
     ensureDaemonReady(19333, expected, {
       fetchImpl: fakeFetch,
       pollAttempts: 1,
-      retireLegacyImpl: async () => {
+      retireDaemonImpl: async () => {
         calls.push('retire');
       },
       sleepImpl: async () => {
@@ -163,7 +163,7 @@ test('ensureDaemonReady: legacy 先退出已验证 PID 并等 health 消失,再 
     fetchImpl: fakeFetch,
     pollAttempts: 2,
     pollIntervalMs: 25,
-    retireLegacyImpl: async () => {
+    retireDaemonImpl: async () => {
       calls.push(`signal verified legacy pid (${phase})`);
       assert.equal(phase, 'legacy');
       phase = 'stopping';
@@ -207,7 +207,7 @@ test('ensureDaemonReady: legacy health 后端口换主时不向 foreign 发 dest
       fetchImpl: fakeFetch,
       pollAttempts: 1,
       pollIntervalMs: 1,
-      retireLegacyImpl: async () => {
+      retireDaemonImpl: async () => {
         calls.push(`verify legacy pid (${phase})`);
         throw new Error('legacy listener PID mismatch');
       },
@@ -220,6 +220,51 @@ test('ensureDaemonReady: legacy health 后端口换主时不向 foreign 发 dest
     }),
   );
   assert.deepEqual(calls, ['GET /health (legacy)', 'GET /health (legacy)', 'verify legacy pid (foreign)']);
+});
+
+test('ensureDaemonReady: 同 home 旧 endpoint daemon 退出后启动 current watcher', async () => {
+  const expected = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9330);
+  const stale = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9222);
+  const calls: string[] = [];
+  let phase: 'stale' | 'stopping' | 'stopped' | 'starting' | 'current' = 'stale';
+  const fakeFetch: typeof fetch = async () => {
+    calls.push(`GET /health (${phase})`);
+    if (phase === 'stopped') throw new TypeError('fetch failed');
+    const identity = phase === 'current' ? expected : stale;
+    return new Response(JSON.stringify({ ok: true, identity, targets: 0 }));
+  };
+
+  await ensureDaemonReady(19333, expected, {
+    fetchImpl: fakeFetch,
+    pollAttempts: 2,
+    pollIntervalMs: 1,
+    retireDaemonImpl: async kind => {
+      calls.push(`retire ${kind} (${phase})`);
+      assert.equal(kind, 'stale-owned');
+      assert.equal(phase, 'stale');
+      phase = 'stopping';
+    },
+    sleepImpl: async () => {
+      calls.push(`sleep (${phase})`);
+      if (phase === 'stopping') phase = 'stopped';
+      if (phase === 'starting') phase = 'current';
+    },
+    spawnImpl: async () => {
+      calls.push(`spawn (${phase})`);
+      assert.equal(phase, 'stopped');
+      phase = 'starting';
+    },
+  });
+  assert.deepEqual(calls, [
+    'GET /health (stale)',
+    'GET /health (stale)',
+    'retire stale-owned (stale)',
+    'sleep (stopping)',
+    'GET /health (stopped)',
+    'spawn (stopped)',
+    'sleep (starting)',
+    'GET /health (current)',
+  ]);
 });
 
 test('ensureDaemonReady: foreign identity 立即拒绝,绝不 shutdown 或 spawn', async () => {
@@ -236,7 +281,7 @@ test('ensureDaemonReady: foreign identity 立即拒绝,绝不 shutdown 或 spawn
     ensureDaemonReady(19333, expected, {
       fetchImpl: fakeFetch,
       pollAttempts: 1,
-      retireLegacyImpl: async () => {
+      retireDaemonImpl: async () => {
         calls.push('retire');
       },
       sleepImpl: async () => {

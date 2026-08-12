@@ -15,7 +15,8 @@ interface DaemonHealth {
   targets: number;
 }
 
-export type DaemonHealthStatus = 'current' | 'legacy' | 'foreign' | 'unreachable';
+export type RetirableDaemonStatus = 'legacy' | 'stale-owned';
+export type DaemonHealthStatus = 'current' | RetirableDaemonStatus | 'foreign' | 'unreachable';
 
 export interface DaemonPollOptions {
   fetchImpl?: typeof fetch;
@@ -25,7 +26,7 @@ export interface DaemonPollOptions {
 }
 
 export interface EnsureDaemonOptions extends DaemonPollOptions {
-  retireLegacyImpl: () => Promise<void>;
+  retireDaemonImpl: (kind: RetirableDaemonStatus) => Promise<void>;
   spawnImpl: () => Promise<void>;
 }
 
@@ -114,29 +115,32 @@ export async function probeDaemonHealth(
   if (!Object.hasOwn(health, 'identity')) {
     return isLegacyDaemonHealth(health) ? 'legacy' : 'foreign';
   }
-  return isDaemonHealth(health) && sameDaemonIdentity(health.identity, expected) ? 'current' : 'foreign';
+  if (!isDaemonHealth(health)) return 'foreign';
+  if (sameDaemonIdentity(health.identity, expected)) return 'current';
+  return health.identity.home === expected.home ? 'stale-owned' : 'foreign';
 }
 
-/** 仅在二次确认仍是无 identity 的 legacy health 后请求退出，并等到 health 真正不可达。 */
-export async function retireLegacyDaemon(
+/** 仅在二次确认状态未变后退出已验证进程，并等 health 改变。 */
+async function retireOwnedDaemon(
   port: number,
   expected: DaemonIdentity,
-  options: DaemonPollOptions & { retireLegacyImpl: () => Promise<void> },
+  kind: RetirableDaemonStatus,
+  options: DaemonPollOptions & { retireDaemonImpl: (kind: RetirableDaemonStatus) => Promise<void> },
 ): Promise<DaemonHealthStatus> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleepImpl = options.sleepImpl ?? defaultSleep;
   const pollAttempts = options.pollAttempts ?? DEFAULT_POLL_ATTEMPTS;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const confirmed = await probeDaemonHealth(port, expected, fetchImpl);
-  if (confirmed !== 'legacy') return confirmed;
+  if (confirmed !== kind) return confirmed;
 
-  await options.retireLegacyImpl();
+  await options.retireDaemonImpl(kind);
   for (let attempt = 0; attempt < pollAttempts; attempt++) {
     await sleepImpl(pollIntervalMs);
     const status = await probeDaemonHealth(port, expected, fetchImpl);
-    if (status !== 'legacy') return status;
+    if (status !== kind) return status;
   }
-  return 'legacy';
+  return kind;
 }
 
 /** 纯生命周期编排：fetch/sleep/spawn 均可注入，不需要启停真实 daemon 即可验证升级路径。 */
@@ -153,17 +157,20 @@ export async function ensureDaemonReady(
   if (status === 'current') return;
   if (status === 'foreign') throw new Error(`监听端口 ${port} 已被其它 identity 的 daemon 占用`);
 
-  if (status === 'legacy') {
-    status = await retireLegacyDaemon(port, expected, {
+  if (status === 'legacy' || status === 'stale-owned') {
+    const retiring = status;
+    status = await retireOwnedDaemon(port, expected, retiring, {
       fetchImpl,
       pollAttempts,
       pollIntervalMs,
-      retireLegacyImpl: options.retireLegacyImpl,
+      retireDaemonImpl: options.retireDaemonImpl,
       sleepImpl,
     });
     if (status === 'current') return;
     if (status === 'foreign') throw new Error(`监听端口 ${port} 已被其它 identity 的 daemon 占用`);
-    if (status === 'legacy') throw new Error(`旧版监听 daemon 无法在端口 ${port} 退出`);
+    if (status === 'legacy' || status === 'stale-owned') {
+      throw new Error(`已拥有的监听 daemon 无法在端口 ${port} 退出`);
+    }
   }
 
   await options.spawnImpl();
@@ -171,7 +178,7 @@ export async function ensureDaemonReady(
     await sleepImpl(pollIntervalMs);
     status = await probeDaemonHealth(port, expected, fetchImpl);
     if (status === 'current') return;
-    if (status === 'foreign' || status === 'legacy') {
+    if (status === 'foreign' || status === 'legacy' || status === 'stale-owned') {
       throw new Error(`监听 daemon 启动失败:端口 ${port} 已被其它 daemon 占用`);
     }
   }

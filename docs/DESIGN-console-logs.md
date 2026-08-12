@@ -56,6 +56,8 @@ logs 命令: 幂等注入(MONITOR_JS)+ 读取 window.__cdpLogs 并结构化序�
   同时验证旧 tmp PID file、目标 loopback listener 的唯一 PID 和当前 CLI `__daemon` 命令行，然后对该 PID
   发信号，等 health 不可达再启动新 daemon。不向端口发 destructive HTTP；带 identity 但不匹配的
   foreign daemon 一律拒绝。
+- 端点切换:若 identity 的规范化 home 相同、仅 CDP host/port 已过期，则用 home-scoped PID file 走同样的
+  PID/listener/命令行验证后退出旧 watcher，再为当前端点启动；不同 home 仍 fail closed。
 
 ### `logs` 命令 / `cdp.logs` API
 - `maybeSpawnDaemon()` 确保 daemon 在跑(持续守护注入)。

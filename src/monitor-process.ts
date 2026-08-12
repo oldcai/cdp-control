@@ -1,11 +1,11 @@
-/** monitor legacy daemon 的进程绑定退出；不依赖 HTTP destructive request。 */
+/** monitor daemon 的进程绑定退出；不依赖 HTTP destructive request。 */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseLsofListeners, parseNetstatListeners } from './port.ts';
 
-export interface LegacyDaemonProcessDependencies {
+export interface DaemonProcessDependencies {
   readPidFile(path: string): string;
   listenerPids(port: number): number[];
   commandLine(pid: number): string;
@@ -30,20 +30,20 @@ function isLegacyDaemonCommand(commandLine: string, scriptPath: string): boolean
  * 只对同时满足 PID file、目标 loopback listener 和本 CLI `__daemon` 命令行的唯一进程发信号。
  * 即使 health 之后端口换主，也不会对新服务发 `/shutdown`。
  */
-export function retireVerifiedLegacyDaemonProcess(
+export function retireVerifiedDaemonProcess(
   port: number,
   pidFile: string,
   scriptPath: string,
-  dependencies: LegacyDaemonProcessDependencies,
+  dependencies: DaemonProcessDependencies,
 ): void {
   let rawPid: string;
   try {
     rawPid = dependencies.readPidFile(pidFile);
   } catch (cause) {
-    throw new Error(`无法读取旧版 daemon PID: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    throw new Error(`无法读取待退出 daemon PID: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   const pid = legacyPid(rawPid);
-  if (pid === null) throw new Error('旧版 daemon PID 文件无效，拒绝退出未绑定进程');
+  if (pid === null) throw new Error('待退出 daemon PID 文件无效，拒绝退出未绑定进程');
 
   let listeners: number[];
   try {
@@ -51,22 +51,24 @@ export function retireVerifiedLegacyDaemonProcess(
       candidate => Number.isInteger(candidate) && candidate > 0,
     );
   } catch (cause) {
-    throw new Error(`无法验证旧版 daemon listener: ${cause instanceof Error ? cause.message : String(cause)}`, {
+    throw new Error(`无法验证待退出 daemon listener: ${cause instanceof Error ? cause.message : String(cause)}`, {
       cause,
     });
   }
   if (listeners.length !== 1 || listeners[0] !== pid) {
-    throw new Error(`旧版 daemon PID ${pid} 与端口 ${port} listener 不唯一一致，拒绝发信号`);
+    throw new Error(`待退出 daemon PID ${pid} 与端口 ${port} listener 不唯一一致，拒绝发信号`);
   }
 
   let commandLine: string;
   try {
     commandLine = dependencies.commandLine(pid);
   } catch (cause) {
-    throw new Error(`无法验证旧版 daemon 命令行: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    throw new Error(`无法验证待退出 daemon 命令行: ${cause instanceof Error ? cause.message : String(cause)}`, {
+      cause,
+    });
   }
   if (!isLegacyDaemonCommand(commandLine, scriptPath)) {
-    throw new Error(`PID ${pid} 不是当前 cdp-control 的旧版 daemon，拒绝发信号`);
+    throw new Error(`PID ${pid} 不是当前 cdp-control 的 daemon，拒绝发信号`);
   }
 
   dependencies.terminate(pid);
@@ -99,8 +101,8 @@ function commandLine(pid: number): string {
   return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim();
 }
 
-export async function retireLegacyDaemonProcess(port: number, scriptPath: string): Promise<void> {
-  retireVerifiedLegacyDaemonProcess(port, legacyDaemonPidFilePath(), scriptPath, {
+export async function retireDaemonProcess(port: number, scriptPath: string, pidFile: string): Promise<void> {
+  retireVerifiedDaemonProcess(port, pidFile, scriptPath, {
     commandLine,
     listenerPids,
     readPidFile: path => readFileSync(path, 'utf8'),

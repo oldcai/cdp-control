@@ -15,7 +15,7 @@ import {
   ensureDaemonReady,
   type DaemonIdentity,
 } from './monitor-health.ts';
-import { retireLegacyDaemonProcess } from './monitor-process';
+import { legacyDaemonPidFilePath, retireDaemonProcess } from './monitor-process';
 
 export const LOGS_PORT = cdpLogsPort();
 
@@ -57,7 +57,8 @@ export async function maybeSpawnDaemon(): Promise<void> {
 export async function ensureDaemon(port = LOGS_PORT): Promise<number> {
   await ensureDaemonReady(port, currentDaemonIdentity(), {
     fetchImpl: fetch,
-    retireLegacyImpl: () => retireLegacyDaemonProcess(port, daemonScriptPath()),
+    retireDaemonImpl: kind =>
+      retireDaemonProcess(port, daemonScriptPath(), kind === 'legacy' ? legacyDaemonPidFilePath() : pidFilePath()),
     sleepImpl: sleep,
     spawnImpl: spawnDaemon,
   });

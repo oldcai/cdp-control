@@ -4,15 +4,15 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   legacyDaemonPidFilePath,
-  type LegacyDaemonProcessDependencies,
-  retireVerifiedLegacyDaemonProcess,
+  type DaemonProcessDependencies,
+  retireVerifiedDaemonProcess,
 } from '../src/monitor-process.ts';
 
 function fakeDependencies(options: {
   pidFile?: string;
   listeners?: number[];
   command?: string;
-}): LegacyDaemonProcessDependencies & { terminated: number[] } {
+}): DaemonProcessDependencies & { terminated: number[] } {
   const terminated: number[] = [];
   return {
     commandLine: () => options.command ?? '/usr/bin/node /repo/dist/cdp.js __daemon',
@@ -27,13 +27,13 @@ test('legacyDaemonPidFilePath: 旧版全局 pid file 只从显式 tmp root 派�
   assert.equal(legacyDaemonPidFilePath(join('tmp', 'fixture')), join('tmp', 'fixture', 'cdp-listen.pid'));
 });
 
-test('retireVerifiedLegacyDaemonProcess: PID file/listener/CLI __daemon 三重一致才发信号', () => {
+test('retireVerifiedDaemonProcess: PID file/listener/CLI __daemon 三重一致才发信号', () => {
   const dependencies = fakeDependencies({});
-  retireVerifiedLegacyDaemonProcess(9333, '/tmp/cdp-listen.pid', '/repo/dist/cdp.js', dependencies);
+  retireVerifiedDaemonProcess(9333, '/tmp/cdp-listen.pid', '/repo/dist/cdp.js', dependencies);
   assert.deepEqual(dependencies.terminated, [4312]);
 });
 
-test('retireVerifiedLegacyDaemonProcess: stale PID、多 listener 或 foreign 命令行均 fail closed', () => {
+test('retireVerifiedDaemonProcess: stale PID、多 listener 或 foreign 命令行均 fail closed', () => {
   const cases = [
     fakeDependencies({ pidFile: 'not-a-pid' }),
     fakeDependencies({ listeners: [9999] }),
@@ -43,7 +43,7 @@ test('retireVerifiedLegacyDaemonProcess: stale PID、多 listener 或 foreign �
   ];
   for (const dependencies of cases) {
     assert.throws(
-      () => retireVerifiedLegacyDaemonProcess(9333, '/tmp/cdp-listen.pid', '/repo/dist/cdp.js', dependencies),
+      () => retireVerifiedDaemonProcess(9333, '/tmp/cdp-listen.pid', '/repo/dist/cdp.js', dependencies),
       /PID|listener|daemon/i,
     );
     assert.deepEqual(dependencies.terminated, []);
