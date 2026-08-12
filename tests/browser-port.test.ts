@@ -13,6 +13,7 @@ import {
   type FixedPortDependencies,
   type ProbeResult,
   type PortState,
+  FixedPortLaunchAttempt,
   FixedPortError,
   hasCdpWebSocket,
   lsofListenerArgs,
@@ -28,6 +29,22 @@ test('hasCdpWebSocket: 只接受非空 ws/wss URL，普通 truthy 值不算健�
 
 test('lsofListenerArgs: POSIX 枚举只请求精确 TCP LISTEN，不会收客户端连接或 UDP', () => {
   assert.deepEqual(lsofListenerArgs(9222), ['-nP', '-iTCP:9222', '-sTCP:LISTEN', '-Fpnt']);
+});
+
+test('FixedPortLaunchAttempt: 未 spawn 的本轮清理不碰历史进程，record 后只清理本轮句柄', () => {
+  const historical = { pid: 401 };
+  const current = { pid: 402 };
+  const killed: Array<{ pid: number }> = [];
+  const attempt = new FixedPortLaunchAttempt<{ pid: number }>();
+
+  attempt.cleanup(process => killed.push(process));
+  assert.deepEqual(killed, []);
+  assert.deepEqual(historical, { pid: 401 });
+
+  attempt.record(current);
+  attempt.cleanup(process => killed.push(process));
+  assert.deepEqual(killed, [current]);
+  assert.equal(attempt.launched, null);
 });
 
 function dependencies(

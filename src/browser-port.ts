@@ -13,6 +13,21 @@ export type FixedPortAction = { action: 'reuse'; browser?: string } | { action: 
 /** 端口门禁失败；调用方据此区分“不得继续”的安全错误与某个浏览器候选自身启动失败。 */
 export class FixedPortError extends Error {}
 
+/** 只记录并清理由本轮固定端口流程实际 spawn 的句柄，避免误杀进程内历史浏览器。 */
+export class FixedPortLaunchAttempt<Process> {
+  launched: Process | null = null;
+
+  record(process: Process): void {
+    this.launched = process;
+  }
+
+  cleanup(terminate: (process: Process) => void): void {
+    const launched = this.launched;
+    this.launched = null;
+    if (launched !== null) terminate(launched);
+  }
+}
+
 /** `/json/version` 只有给出真正的 ws/wss 调试地址才算健康 CDP。 */
 export function hasCdpWebSocket(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) return false;
