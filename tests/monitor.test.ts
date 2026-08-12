@@ -98,6 +98,36 @@ test('probeDaemonHealth: legacy 只认精确旧 schema 与非负整数 targets',
   }
 });
 
+test('probeDaemonHealth: health redirect 是可达 foreign,不跟随到 legacy JSON', async () => {
+  const expected = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9222);
+  const calls: string[] = [];
+  const fakeFetch: typeof fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const pathname = new URL(url).pathname;
+    calls.push(`${init?.method ?? 'GET'} ${pathname} redirect=${init?.redirect ?? 'follow'}`);
+    if (pathname === '/health' && init?.redirect === 'manual') {
+      return new Response(null, { status: 302, headers: { location: 'http://127.0.0.1:19444/legacy-health' } });
+    }
+    return new Response(JSON.stringify({ ok: true, targets: 1 }));
+  };
+
+  assert.equal(await probeDaemonHealth(19333, expected, fakeFetch), 'foreign');
+  await assert.rejects(
+    ensureDaemonReady(19333, expected, {
+      fetchImpl: fakeFetch,
+      pollAttempts: 1,
+      sleepImpl: async () => {
+        calls.push('sleep');
+      },
+      spawnImpl: async () => {
+        calls.push('spawn');
+      },
+    }),
+    /identity|daemon|9333/i,
+  );
+  assert.deepEqual(calls, ['GET /health redirect=manual', 'GET /health redirect=manual']);
+});
+
 test('ensureDaemonReady: legacy 先 shutdown 并等 health 消失,再 spawn 并等待 current', async () => {
   const expected = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9222);
   const calls: string[] = [];

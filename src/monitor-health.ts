@@ -97,7 +97,7 @@ export async function probeDaemonHealth(
 ): Promise<DaemonHealthStatus> {
   let response: Response;
   try {
-    response = await fetchImpl(`http://127.0.0.1:${port}/health`);
+    response = await fetchImpl(`http://127.0.0.1:${port}/health`, { redirect: 'manual' });
   } catch {
     return 'unreachable';
   }
@@ -130,7 +130,7 @@ export async function retireLegacyDaemon(
   if (confirmed !== 'legacy') return confirmed;
 
   try {
-    await fetchImpl(`http://127.0.0.1:${port}/shutdown`, { method: 'POST' });
+    await fetchImpl(`http://127.0.0.1:${port}/shutdown`, { method: 'POST', redirect: 'manual' });
   } catch {
     // legacy daemon 可能在响应完成前已经退出；以后续 health 为准。
   }
