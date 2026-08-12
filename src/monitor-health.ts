@@ -69,6 +69,19 @@ function isDaemonHealth(value: unknown): value is DaemonHealth {
   return isRecord(value) && value.ok === true && typeof value.targets === 'number' && isDaemonIdentity(value.identity);
 }
 
+function isLegacyDaemonHealth(value: Record<string, unknown>): boolean {
+  const keys = Object.keys(value);
+  return (
+    keys.length === 2 &&
+    Object.hasOwn(value, 'ok') &&
+    Object.hasOwn(value, 'targets') &&
+    value.ok === true &&
+    typeof value.targets === 'number' &&
+    Number.isInteger(value.targets) &&
+    value.targets >= 0
+  );
+}
+
 export function sameDaemonIdentity(actual: DaemonIdentity, expected: DaemonIdentity): boolean {
   return actual.home === expected.home && actual.cdpHost === expected.cdpHost && actual.cdpPort === expected.cdpPort;
 }
@@ -98,7 +111,7 @@ export async function probeDaemonHealth(
   }
   if (!isRecord(health)) return 'foreign';
   if (!Object.hasOwn(health, 'identity')) {
-    return health.ok === true && typeof health.targets === 'number' ? 'legacy' : 'foreign';
+    return isLegacyDaemonHealth(health) ? 'legacy' : 'foreign';
   }
   return isDaemonHealth(health) && sameDaemonIdentity(health.identity, expected) ? 'current' : 'foreign';
 }

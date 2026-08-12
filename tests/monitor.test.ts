@@ -64,6 +64,40 @@ test('probeDaemonHealth: 区分 current、legacy、foreign 与 unreachable', asy
   assert.equal(await daemonHealthy(19333, expected, legacyFetch), false);
 });
 
+test('probeDaemonHealth: legacy 只认精确旧 schema 与非负整数 targets', async () => {
+  const expected = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9222);
+  const lookalikes: unknown[] = [
+    { ok: true, targets: 1, service: 'worker' },
+    { ok: true, targets: -1 },
+    { ok: true, targets: 0.5 },
+  ];
+
+  for (const health of lookalikes) {
+    const calls: string[] = [];
+    const fakeFetch: typeof fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      calls.push(`${init?.method ?? 'GET'} ${new URL(url).pathname}`);
+      return new Response(JSON.stringify(health));
+    };
+
+    assert.equal(await probeDaemonHealth(19333, expected, fakeFetch), 'foreign');
+    await assert.rejects(
+      ensureDaemonReady(19333, expected, {
+        fetchImpl: fakeFetch,
+        pollAttempts: 1,
+        sleepImpl: async () => {
+          calls.push('sleep');
+        },
+        spawnImpl: async () => {
+          calls.push('spawn');
+        },
+      }),
+      /identity|daemon|9333/i,
+    );
+    assert.deepEqual(calls, ['GET /health', 'GET /health']);
+  }
+});
+
 test('ensureDaemonReady: legacy 先 shutdown 并等 health 消失,再 spawn 并等待 current', async () => {
   const expected = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9222);
   const calls: string[] = [];
