@@ -20,10 +20,47 @@ export interface Target {
   webSocketDebuggerUrl?: string;
 }
 
-export async function getJson(path: string, timeoutMs = 5000): Promise<any> {
+interface CdpError {
+  message?: string;
+}
+
+interface CdpMessage {
+  id?: number;
+  method?: string;
+  params?: unknown;
+  result?: unknown;
+  error?: CdpError;
+}
+
+export interface BrowserVersion {
+  Browser?: string;
+  webSocketDebuggerUrl?: string;
+}
+
+interface RuntimeEvaluateResult {
+  exceptionDetails?: {
+    text?: string;
+    exception?: { description?: string };
+  };
+  result?: { value?: unknown };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isTarget(value: unknown): value is Target {
+  return isRecord(value) && typeof value.id === 'string' && typeof value.url === 'string';
+}
+
+export async function getJson<T = unknown>(path: string, timeoutMs = 5000): Promise<T> {
   const r = await fetch(`${BASE}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
   if (!r.ok) throw new Error(`HTTP ${r.status} GET ${path}`);
-  return r.json();
+  return r.json() as Promise<T>;
 }
 
 // 轮询等待的通用 sleep(CLI/daemon 多处复用)。
@@ -36,8 +73,8 @@ export function wsConnect(url: string, timeout = 8000): Promise<WebSocket> {
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
-    } catch (e: any) {
-      return reject(new Error(`创建 WebSocket 失败: ${e.message}`));
+    } catch (error: unknown) {
+      return reject(new Error(`创建 WebSocket 失败: ${errorMessage(error)}`));
     }
     const t = setTimeout(() => {
       try {
@@ -59,21 +96,23 @@ export function wsConnect(url: string, timeout = 8000): Promise<WebSocket> {
 let seq = 0;
 const pending = new Map<
   number,
-  { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; method: string }
+  { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; method: string }
 >();
 
-export function attachDispatcher(ws: WebSocket, onEvent?: (method: string, params: any) => void): void {
-  ws.onmessage = (ev: any) => {
-    let msg: any;
+export function attachDispatcher(ws: WebSocket, onEvent?: (method: string, params: unknown) => void): void {
+  ws.onmessage = ev => {
+    let msg: CdpMessage;
     try {
-      msg = JSON.parse(ev.data);
+      const parsed: unknown = JSON.parse(String(ev.data));
+      if (!isRecord(parsed)) return;
+      msg = parsed;
     } catch {
       return;
     }
     if (msg.id === undefined) {
       if (onEvent) {
         try {
-          onEvent(msg.method, msg.params);
+          onEvent(typeof msg.method === 'string' ? msg.method : '', msg.params);
         } catch {}
       }
       return;
@@ -87,9 +126,14 @@ export function attachDispatcher(ws: WebSocket, onEvent?: (method: string, param
   };
 }
 
-export function send(ws: WebSocket, method: string, params: any = {}, timeout = 20000): Promise<any> {
+export function send<T = unknown>(
+  ws: WebSocket,
+  method: string,
+  params: Record<string, unknown> = {},
+  timeout = 20000,
+): Promise<T> {
   const id = ++seq;
-  return new Promise((resolve, reject) => {
+  const response = new Promise<unknown>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`命令超时: ${method}`));
@@ -97,6 +141,7 @@ export function send(ws: WebSocket, method: string, params: any = {}, timeout = 
     pending.set(id, { resolve, reject, timer, method });
     ws.send(JSON.stringify({ id, method, params }));
   });
+  return response.then(result => result as T);
 }
 
 // ---- target 发现 / 选择 ----
@@ -105,8 +150,9 @@ export function send(ws: WebSocket, method: string, params: any = {}, timeout = 
 // 这一不变量同时支撑 list 的前台标记与 resolveTarget 的默认选择(无 match 取第一个普通网页即前台)。
 // 过滤只剔除 devtools(永不为前台),不影响哪个真 page 排首位。
 export async function listTargets(): Promise<Target[]> {
-  const all = await getJson('/json/list');
-  return all.filter((t: Target) => t.type === 'page' && !/^devtools:\/\//.test(t.url || ''));
+  const all = await getJson<unknown>('/json/list');
+  if (!Array.isArray(all)) throw new Error('/json/list 返回值不是数组');
+  return all.filter(isTarget).filter(t => t.type === 'page' && !/^devtools:\/\//.test(t.url || ''));
 }
 
 export function resolveTarget(list: Target[], match?: string): Target {
@@ -128,7 +174,7 @@ export function resolveTarget(list: Target[], match?: string): Target {
 
 // ---- 页面级连接与执行 ----
 
-export async function pageWs(target: Target, onEvent?: (method: string, params: any) => void): Promise<WebSocket> {
+export async function pageWs(target: Target, onEvent?: (method: string, params: unknown) => void): Promise<WebSocket> {
   if (!target.webSocketDebuggerUrl) throw new Error('该 target 没有调试地址');
   const ws = await wsConnect(target.webSocketDebuggerUrl);
   attachDispatcher(ws, onEvent);
@@ -136,14 +182,17 @@ export async function pageWs(target: Target, onEvent?: (method: string, params: 
 }
 
 export async function browserWs(): Promise<WebSocket> {
-  const v = await getJson('/json/version');
+  const v = await getJson<BrowserVersion>('/json/version');
+  if (typeof v.webSocketDebuggerUrl !== 'string') {
+    throw new Error('/json/version 缺少 webSocketDebuggerUrl');
+  }
   const ws = await wsConnect(v.webSocketDebuggerUrl);
   attachDispatcher(ws);
   return ws;
 }
 
-export async function evalJs(ws: WebSocket, expression: string, timeout = 20000): Promise<any> {
-  const r = await send(
+export async function evalJs(ws: WebSocket, expression: string, timeout = 20000): Promise<unknown> {
+  const r = await send<RuntimeEvaluateResult>(
     ws,
     'Runtime.evaluate',
     {
@@ -165,7 +214,7 @@ export async function evalJs(ws: WebSocket, expression: string, timeout = 20000)
 
 /** 在 target 执行 JS,返回 returnByValue 的值。用 try/finally 保证即使 evalJs 抛错也关闭 ws,
  * 否则异常路径漏掉 ws.close() 会让连接一直开着,Node 事件循环不空 → run 脚本结束后进程挂住不退出。 */
-export async function evaluate(target: Target, expression: string, timeout?: number): Promise<any> {
+export async function evaluate(target: Target, expression: string, timeout?: number): Promise<unknown> {
   const ws = await pageWs(target);
   try {
     return await evalJs(ws, expression, timeout);

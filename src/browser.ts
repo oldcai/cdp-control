@@ -7,7 +7,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
-import { getJson, setPort, HOST, PORT } from './transport';
+import { getJson, setPort, HOST, PORT, type BrowserVersion } from './transport';
 import { maybeSpawnDaemon } from './monitor';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
 import {
@@ -60,7 +60,7 @@ async function waitReady(timeoutMs = 20000): Promise<void> {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     try {
-      const v = await getJson('/json/version');
+      const v = await getJson<BrowserVersion>('/json/version');
       if (v?.webSocketDebuggerUrl) return;
     } catch {}
     await new Promise(r => setTimeout(r, 400));
@@ -71,7 +71,7 @@ async function waitReady(timeoutMs = 20000): Promise<void> {
 /** ready 探活(一次 GET,顺带拿浏览器名)。`timeoutMs` 可收紧:复验占用者身份时不想为"只接受不应答"的占用者等满 5s。 */
 async function probeReady(timeoutMs?: number): Promise<{ ready: boolean; browser?: string }> {
   try {
-    const v = await getJson('/json/version', timeoutMs);
+    const v = await getJson<BrowserVersion>('/json/version', timeoutMs);
     if (!v?.webSocketDebuggerUrl) return { ready: false };
     return { ready: true, browser: describeBrowser(v.Browser || '') };
   } catch {
@@ -206,8 +206,9 @@ async function coldStart(busyProbed: number | null): Promise<ColdResult> {
     let cfg: BrowserConfig | null;
     try {
       cfg = loadConfigOrNull();
-    } catch (e: any) {
-      throw new Error(`${(e as Error).message}\n浏览器启动配置损坏,不做兜底,请编辑 ${p}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${message}\n浏览器启动配置损坏,不做兜底,请编辑 ${p}`);
     }
     if (!cfg) throw new Error(`浏览器启动配置损坏,不做兜底,请编辑 ${p}`);
     if (!existsSync(cfg.exe)) throw new Error(`browser.json 的 exe 不存在: ${cfg.exe}\n请编辑 ${p}`);

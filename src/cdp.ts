@@ -3,25 +3,40 @@
  * 编译产物为 dist/cdp.js(esbuild bundle,含 commander,dist 自包含)。
  * 运行 `node dist/cdp.js <子命令>`;require 本文件时导出 api。
  */
-import { program } from 'commander';
+import { program, type Command } from 'commander';
 import { readFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
-import { coreApi } from './api';
+import {
+  coreApi,
+  type ActionResult,
+  type FeedbackResult,
+  type InfoResult,
+  type RefAwareResult,
+  type ViewOpts,
+} from './api';
 import { logs, cmdListen } from './monitor';
 import { ensureBrowser, killBrowser } from './browser';
 import { runScript } from './run-script';
 import { runRecipe } from './recipe-runner';
+import type { Target } from './transport';
 
-const api: any = { ...coreApi, logs, ensure: ensureBrowser, kill: killBrowser };
 // recipe:暴露给 run 脚本显式取站点摘要(命中返回 {lines},未命中 null)。
-api.recipe = async (target: any, opts: any) => runRecipe(target.url, api, target, opts);
+async function recipe(target: Target, opts: unknown): Promise<{ lines: string[] } | null> {
+  return runRecipe(target.url, api, target, opts);
+}
+
+const api = { ...coreApi, logs, ensure: ensureBrowser, kill: killBrowser, recipe };
+
+interface DispatchOptions extends ViewOpts {
+  tree?: boolean;
+}
 
 /**
  * view/fetch 共用的感知分发:默认跑命中 recipe(站点摘要),未命中或用户表达建树意图 → 纯结构树。
  * 建树意图(强制树)= --tree / 位置 ref / --selector-file / --visible-only / --scroll-* 任一。
  * 分发在 CLI action 顶层,`api.view` 保持纯结构(fetchPage/操作反馈内部照旧用,无递归)。
  */
-async function dispatchView(target: any, opts: any): Promise<{ lines: string[]; recipe: boolean }> {
+async function dispatchView(target: Target, opts: DispatchOptions): Promise<{ lines: string[]; recipe: boolean }> {
   const treeIntent =
     !!opts.tree || opts.ref != null || opts.selector != null || !!opts.visibleOnly || !!opts.scrollToLoad;
   if (!treeIntent) {
@@ -43,13 +58,14 @@ function readOptFile(file: string | undefined): string | undefined {
   if (file === undefined) return undefined;
   try {
     return readFileSync(file, 'utf8').trim();
-  } catch (e: any) {
-    throw new Error(`读取参数文件失败: ${file} — ${e.message}`);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`读取参数文件失败: ${file} — ${message}`);
   }
 }
 
 /** 带 target 的命令统一拿目标并打印提示。target 为该命令 option 解析出的值。 */
-async function needTarget(target?: string): Promise<any> {
+async function needTarget(target?: string): Promise<Target> {
   const t = await api.resolve(target ?? undefined);
   console.error(`→ target: ${t.title || ''} ${t.url}`);
   return t;
@@ -70,9 +86,9 @@ program
     const list = await api.list(); // api.list 已在 api 层前置 ensure(未起自动启动,就绪零开销)。
     console.log(`共 ${list.length} 个 tab(第一项 = 前台):`);
     if (list.length === 0) return;
-    const line = (t: any, i: number) =>
+    const line = (t: Target, i: number) =>
       `${t.id.slice(0, 8)}  ${t.title || '(无标题)'}  ${t.url}${i === 0 ? '  ← 前台' : ''}`;
-    console.log(list.map((t: any, i: number) => `${i + 1}. ${line(t, i)}`).join('\n'));
+    console.log(list.map((t, i) => `${i + 1}. ${line(t, i)}`).join('\n'));
   });
 
 program
@@ -128,7 +144,7 @@ program
   )
   .action(async url => {
     const tid = await api.open(url || 'about:blank'); // api.open 已在 api 层前置 ensure。
-    let t: any;
+    let t: Target | undefined;
     try {
       t = await api.resolve(tid);
       try {
@@ -168,7 +184,7 @@ program
   .action(async file => {
     const abs = pathResolve(file);
     const code = readFileSync(abs, 'utf8');
-    (globalThis as any).cdp = api;
+    Reflect.set(globalThis, 'cdp', api);
     const r = await runScript(code, api);
     if (r !== undefined) console.log(typeof r === 'string' ? r : JSON.stringify(r, null, 2));
   });
@@ -257,6 +273,14 @@ interface FindCliHit {
   line: string;
 }
 
+interface CliOptions {
+  ancestor?: string | number;
+  target?: string;
+  feedback?: boolean;
+  feedbackDelay?: number;
+  dom?: boolean;
+}
+
 targetCmd('find', '按文本或 selector 找元素并登记新 ref(不必重新读整棵树)')
   .option('--text <关键词>', '搜索自身直接文本包含关键词的元素(穿透 shadow)')
   .option('--selector <css>', '按 CSS selector 命中(支持 `>>>` shadow 链)')
@@ -279,11 +303,11 @@ function normTarget(t: string, ancestor: string | number | undefined): string | 
   if (/^\d+$/.test(t)) return { ref: Number(t), ancestor: ancestor != null ? Number(ancestor) : undefined };
   return t;
 }
-const targetOpt = (c: any) =>
+const targetOpt = (c: Command): Command =>
   c.option('--ancestor <n>', '按 ref 定位后向上爬 N 层父级再操作(默认 0;把内容叶子抬到区域容器;仅对数字 ref 生效)');
 
 /** 操作后自动反馈 option(click/fill/focus/hover/press-key 共用)。默认开启,等 feedbackDelay 后回报新增内容 + tab 变化。 */
-const feedbackOpt = (c: any) =>
+const feedbackOpt = (c: Command): Command =>
   c
     .option('--no-feedback', '关闭操作后自动反馈(不等待、不观察、不 diff tab)')
     .option(
@@ -295,7 +319,7 @@ const feedbackOpt = (c: any) =>
 
 /** 组装反馈配置(供 api 动作方法):--no-feedback 或 --feedback-delay。
  * 注意 commander 的 `--no-feedback` 生成布尔 option 名为 `feedback`(默认 true,传 --no-feedback 时 false)。 */
-const feedbackCfg = (opts: any): { noFeedback: boolean; feedbackDelay: number } => ({
+const feedbackCfg = (opts: CliOptions): { noFeedback: boolean; feedbackDelay: number } => ({
   noFeedback: opts.feedback === false,
   feedbackDelay: opts.feedbackDelay != null ? Number(opts.feedbackDelay) : 1000,
 });
@@ -307,10 +331,10 @@ const feedbackCfg = (opts: any): { noFeedback: boolean; feedbackDelay: number } 
  *  - 整链 detached(页面刷新/重建):提示重新 view。
  * 返回是否已打印(调用方据此跳过自己的正常输出)。
  */
-function printRefInvalid(r: any): boolean {
+function printRefInvalid(r: RefAwareResult): boolean {
   if (!r?.refInvalid) return false;
   const rec = r.recovered;
-  if (rec?.never) {
+  if (rec && 'never' in rec) {
     console.log(`ref 失效: ${rec.msg}`);
   } else if (rec) {
     console.log(`ref 失效 → 已自动 view 最近存活容器 [ref=${rec.rootRef}],用里面的新 [ref] 重试:`);
@@ -324,7 +348,7 @@ function printRefInvalid(r: any): boolean {
 /** 操作结果行 + 附唯一 selector(同一行,逗号分隔)。后续对该元素操作优先用此 selector,避免 ref 失效。
  * selector 超长截断(位置链常很长);shadow 内元素不返回 selector,提示用 ref 操作。
  * ref 失效自愈:打印"最近存活容器 + 局部 view",提示 agent 用里面的新 ref 重试(不打印"已操作")。 */
-function printAction(line: string, r: any): void {
+function printAction(line: string, r: ActionResult): void {
   if (printRefInvalid(r)) return;
   if (r?.shadow) {
     console.log(line + ' （该元素在 shadow 内,继续用 ref 操作)');
@@ -336,7 +360,7 @@ function printAction(line: string, r: any): void {
 }
 
 /** 打印操作反馈:新增内容 / 文本变化 / 白名单属性变化 / tab 变化分块。fb 为 null(--no-feedback)时无输出。 */
-function printFeedback(fb: any): void {
+function printFeedback(fb: FeedbackResult | null | undefined): void {
   if (!fb) return;
   const out: string[] = [];
   if (fb.note) out.push(fb.note);
@@ -392,7 +416,7 @@ const argLabel = (a: string | { ref: number; ancestor?: number }): string =>
   typeof a === 'string' ? a : 'ref=' + a.ref + (a.ancestor ? `↑${a.ancestor}` : '');
 
 /** info 结果(祖先链)格式化:逐层 tag#id.class[data-*][aria][role],根→叶,末尾附目标层号与建议 selector。 */
-function printInfoChain(r: any): void {
+function printInfoChain(r: InfoResult): void {
   if (!r?.chain?.length) {
     console.log('(空链)');
     return;
@@ -415,22 +439,17 @@ function printInfoChain(r: any): void {
 feedbackOpt(targetOpt(targetCmd('click', '点击元素')))
   .argument('<target>', 'ref 序号或 selector(全数字=ref)')
   .option('--dom', '显式使用旧 DOM 合成点击(isTrusted:false),仅作 fixed 布局逃生舱')
-  .action(
-    async (
-      t: string,
-      opts: { ancestor?: string | number; target?: string; feedback?: boolean; feedbackDelay?: number; dom?: boolean },
-    ) => {
-      const arg = normTarget(t, opts.ancestor);
-      const r = await api.click(await needTarget(opts.target), arg, { ...feedbackCfg(opts), dom: !!opts.dom });
-      printAction(`已点击: ${argLabel(arg)} (${r.tag})`, r);
-      printFeedback(r.feedback);
-    },
-  );
+  .action(async (t: string, opts: CliOptions) => {
+    const arg = normTarget(t, opts.ancestor);
+    const r = await api.click(await needTarget(opts.target), arg, { ...feedbackCfg(opts), dom: !!opts.dom });
+    printAction(`已点击: ${argLabel(arg)} (${r.tag})`, r);
+    printFeedback(r.feedback);
+  });
 
 feedbackOpt(targetOpt(targetCmd('fill', '填输入框并触发 input/change')))
   .argument('<target>', 'ref 序号或 selector(全数字=ref)')
   .argument('<value>', '值')
-  .action(async (t: string, val: string, opts: any) => {
+  .action(async (t: string, val: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
     const r = await api.fill(await needTarget(opts.target), arg, val, feedbackCfg(opts));
     printAction(`已填入: ${argLabel(arg)} ← ${val}`, r);
@@ -439,7 +458,7 @@ feedbackOpt(targetOpt(targetCmd('fill', '填输入框并触发 input/change')))
 
 feedbackOpt(targetOpt(targetCmd('focus', '聚焦元素')))
   .argument('<target>', 'ref 序号或 selector(全数字=ref)')
-  .action(async (t: string, opts: any) => {
+  .action(async (t: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
     const r = await api.focus(await needTarget(opts.target), arg, feedbackCfg(opts));
     printAction(`已聚焦: ${argLabel(arg)} (${r.tag})`, r);
@@ -492,7 +511,7 @@ targetCmd('article', '以 ref 为根提取格式友好的 Markdown 文章(保序
 
 feedbackOpt(targetCmd('press-key', '按键/组合键,如 Enter、Ctrl+Shift+A、Tab'))
   .argument('<key>', '按键')
-  .action(async (key: string, opts: any) => {
+  .action(async (key: string, opts: CliOptions) => {
     const r = await api.pressKey(await needTarget(opts.target), key, feedbackCfg(opts));
     console.log(`已按键: ${key}`);
     printFeedback(r?.feedback);
@@ -500,7 +519,7 @@ feedbackOpt(targetCmd('press-key', '按键/组合键,如 Enter、Ctrl+Shift+A、
 
 feedbackOpt(targetOpt(targetCmd('hover', '鼠标移到元素上')))
   .argument('<target>', 'ref 序号或 selector(全数字=ref)')
-  .action(async (t: string, opts: any) => {
+  .action(async (t: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
     const r = await api.hover(await needTarget(opts.target), arg, feedbackCfg(opts));
     printAction(`已悬停: ${argLabel(arg)}`, r);
@@ -534,15 +553,18 @@ targetCmd('logs', '读 target 控制台日志(常驻 daemon,支持过滤)')
       const ts = new Date(e.ts).toTimeString().slice(0, 8);
       const loc = e.line != null ? ` (${e.line}:${e.col ?? ''})` : '';
       const argsText = (e.args || [])
-        .map((a: any) => (a == null ? 'undefined' : typeof a === 'string' ? a : JSON.stringify(a)))
+        .map((value: unknown) =>
+          value == null ? 'undefined' : typeof value === 'string' ? value : JSON.stringify(value),
+        )
         .join(' ');
       console.log(`[${ts}][${e.level}] ${argsText}${loc}`);
     }
   });
 
 if (require.main === module) {
-  program.parseAsync(process.argv).catch((err: any) => {
-    console.error(`错误: ${err.message}`);
+  program.parseAsync(process.argv).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`错误: ${message}`);
     // 用 exitCode 而非 process.exit(1):强制退出会在 undici fetch 连接残留时触发 libuv 断言崩溃(Windows UV_HANDLE_CLOSING)。
     process.exitCode = 1;
   });

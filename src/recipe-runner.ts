@@ -22,7 +22,7 @@ import { srcRecipesDir } from './rules-store.ts';
 interface RecipeRule {
   name: string;
   scope: string | string[];
-  extract: (cdp: any, ctx: { target: any; opts: any }) => Promise<{ lines?: string[] } | null>;
+  extract: (cdp: unknown, ctx: { target: unknown; opts: unknown }) => Promise<{ lines?: string[] } | null>;
 }
 
 interface RuleFile {
@@ -30,15 +30,22 @@ interface RuleFile {
   rules: RecipeRule[];
 }
 
+function isRecipeRule(value: unknown): value is RecipeRule {
+  if (typeof value !== 'object' || value === null) return false;
+  const rule = value as Record<string, unknown>;
+  const validScope =
+    typeof rule.scope === 'string' ||
+    (Array.isArray(rule.scope) && rule.scope.every(scope => typeof scope === 'string'));
+  return typeof rule.name === 'string' && validScope && typeof rule.extract === 'function';
+}
+
 // 用动态 import 加载 CJS recipe 文件(ESM 测试与 esbuild CJS bundle 都可用;.js 的 default 即 module.exports)。
 async function loadRules(dir: string, f: string): Promise<RecipeRule[] | null> {
   try {
-    const mod: any = await import(pathToFileURL(join(dir, f)).href);
-    const arr = mod?.default ?? mod;
+    const mod: unknown = await import(pathToFileURL(join(dir, f)).href);
+    const arr = typeof mod === 'object' && mod !== null && 'default' in mod ? mod.default : mod;
     if (!Array.isArray(arr)) return null;
-    const rules = arr.filter(
-      r => r && (typeof r.scope === 'string' || Array.isArray(r.scope)) && typeof r.extract === 'function',
-    );
+    const rules = arr.filter(isRecipeRule);
     return rules.length ? rules : null;
   } catch {
     return null;
@@ -91,7 +98,12 @@ export async function matchRecipe(url: string): Promise<{ rule: RecipeRule; file
 }
 
 /** 跑命中 url 的 recipe,返回 `{lines}`;无命中 / extract 异常 / 返回不含 lines → null(上层安全回落树)。 */
-export async function runRecipe(url: string, cdp: any, target: any, opts: any): Promise<{ lines: string[] } | null> {
+export async function runRecipe(
+  url: string,
+  cdp: unknown,
+  target: unknown,
+  opts: unknown,
+): Promise<{ lines: string[] } | null> {
   const m = await matchRecipe(url);
   if (!m) return null;
   try {

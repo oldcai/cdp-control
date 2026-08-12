@@ -17,6 +17,10 @@ import type { ViewArgs } from './lib/arg';
 
 declare const __CDP_ARG__: ViewArgs;
 
+type ViewGlobals = typeof globalThis & { __cdpFullViewDone?: boolean };
+
+const viewGlobals = globalThis as ViewGlobals;
+
 // 整段包成 async(通过 setResult 传 promise,footer await):支持 --scroll-to-load 先异步滚动再建视图。
 setResult(
   (async () => {
@@ -93,8 +97,8 @@ setResult(
     // 页面级标志 __cdpFullViewDone:同页面刷新前只滚一次,后续整页 view 不再默认滚(除非显式 --scroll-to-load)。
     const isFullView = __CDP_ARG__.ref == null && !__CDP_ARG__.selector && !__CDP_ARG__.visibleOnly;
     const hasExplicitScroll = __CDP_ARG__.scrollToLoad || __CDP_ARG__.scrollPages != null || !!__CDP_ARG__.scrollTo;
-    if (__CDP_ARG__.scrollToLoad || (isFullView && !hasExplicitScroll && !(globalThis as any).__cdpFullViewDone)) {
-      if (isFullView && !hasExplicitScroll) (globalThis as any).__cdpFullViewDone = true; // 先置位防并发重滚
+    if (__CDP_ARG__.scrollToLoad || (isFullView && !hasExplicitScroll && !viewGlobals.__cdpFullViewDone)) {
+      if (isFullView && !hasExplicitScroll) viewGlobals.__cdpFullViewDone = true; // 先置位防并发重滚
       await scrollToLoad();
       // 滚动触发懒加载后等待内容渲染(scrollWait 默认 1000ms;显式传可调),否则滚动完立即建树,新回答/评论区还没加载出来。
       const wait = __CDP_ARG__.scrollWait != null ? __CDP_ARG__.scrollWait : 1000;

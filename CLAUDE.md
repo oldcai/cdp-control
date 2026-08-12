@@ -11,7 +11,8 @@
 开发与 CI 的最低 Node.js 版本为 22.6.0(测试入口使用 `--experimental-strip-types`):
 
 ```bash
-npm install      # 首次:esbuild/typescript/@types/node/commander(运行时仅 commander)
+npm install      # 首次:Biome/esbuild/typescript/@types/node/commander(运行时仅 commander)
+npm run lint     # Biome lint+格式校验、依赖边界检查、Node/集成 harness 类型检查
 npm run build    # tsc --noEmit + esbuild(编译 + 打包注入脚本)
 npm test         # node:test 跑 tests/*.test.ts(零运行时依赖)
 ```
@@ -38,7 +39,7 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 | `src/inject/lib/` | 注入侧共享模块 | 浏览器 | 打进各入口 |
 | `skills/cdp-control/SKILL.md` | agent 用法文档(极薄,只教调 `cdp-control`);`~/.claude/skills/cdp-control` 符号链接指向它 | — | 不动 |
 
-依赖单向无环:`transport ← inject-loader/browser-discover/browser-config ← monitor/browser ← api ← cdp`(browser 不再依赖 api,故 api 可前置 ensureBrowser)。定位收敛为两套:**ref(前台索引)+ selector(后台匹配)**。
+依赖单向无环:`paths(最底层) ← transport ← inject-loader/browser-discover/browser-config ← monitor/browser ← api ← cdp`(browser 不再依赖 api,故 api 可前置 ensureBrowser)。`npm run lint` 会机器校验 Node 层级/无环、`paths.ts` 零项目依赖以及 `src/inject/**` 不越界到 Node 侧。定位收敛为两套:**ref(前台索引)+ selector(后台匹配)**。
 
 ## 浏览器连接(ensureBrowser / kill)
 

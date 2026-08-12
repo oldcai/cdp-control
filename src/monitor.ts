@@ -112,8 +112,8 @@ export async function cmdListen(): Promise<never> {
     for (const t of list) if (!attached.has(t.id)) await injectMon(t);
   }
 
-  const server = createServer(async (req: any, res: any) => {
-    const url = new URL(req.url, `http://127.0.0.1:${LOGS_PORT}`);
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url ?? '/', `http://127.0.0.1:${LOGS_PORT}`);
     res.setHeader('content-type', 'application/json; charset=utf-8');
     if (url.pathname === '/health') {
       res.end(JSON.stringify({ ok: true, targets: attached.size }));
@@ -150,10 +150,29 @@ export interface LogsOpts {
   since?: number;
 }
 
+export interface LogEntry {
+  ts: number;
+  type: string;
+  level: string;
+  args?: unknown[];
+  stack?: string;
+  message?: string;
+  source?: string;
+  line?: number;
+  col?: number;
+  reason?: unknown;
+}
+
+function isLogEntry(value: unknown): value is LogEntry {
+  if (typeof value !== 'object' || value === null) return false;
+  const entry = value as Partial<LogEntry>;
+  return typeof entry.ts === 'number' && typeof entry.type === 'string' && typeof entry.level === 'string';
+}
+
 /**
  * 读 target 的控制台日志:幂等注入监控脚本 + 读取 window.__cdpLogs(结构化嵌套对象)。
  */
-export async function logs(target: Target | string, opts: LogsOpts = {}): Promise<any[]> {
+export async function logs(target: Target | string, opts: LogsOpts = {}): Promise<LogEntry[]> {
   maybeSpawnDaemon().catch(() => {});
   if (typeof target === 'string') target = await resolve(target);
   const levelSet = opts.level
@@ -164,7 +183,7 @@ export async function logs(target: Target | string, opts: LogsOpts = {}): Promis
     : null;
   const since = opts.since || 0;
   const value = await evaluate(target, readExpr(levelSet, since), 30000);
-  return Array.isArray(value) ? value : [];
+  return Array.isArray(value) ? value.filter(isLogEntry) : [];
 }
 
 /**

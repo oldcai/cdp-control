@@ -13,6 +13,6 @@ if (!files.length) {
 }
 try {
   execSync(`node --test --experimental-strip-types ${files.map(f => `"${f}"`).join(' ')}`, { stdio: 'inherit' });
-} catch (e) {
+} catch {
   process.exit(1);
 }

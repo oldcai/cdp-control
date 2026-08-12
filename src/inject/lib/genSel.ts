@@ -21,7 +21,7 @@ function escAttr(s: string): string {
 /** 全文档内该 selector 是否唯一命中(运行时 document 可用)。 */
 function isUnique(sel: string): boolean {
   try {
-    return (document as any).querySelectorAll(sel).length === 1;
+    return document.querySelectorAll(sel).length === 1;
   } catch {
     return false;
   }
@@ -30,7 +30,7 @@ function isUnique(sel: string): boolean {
 /** 全文档内该 selector 是否命中给定元素自己(精确,不漂到祖先)。 */
 function matchesEl(el: Element, sel: string): boolean {
   try {
-    return (document as any).querySelector(sel) === el;
+    return document.querySelector(sel) === el;
   } catch {
     return false;
   }
@@ -63,7 +63,7 @@ function selfAnchor(el: Element): string | null {
   }
 
   // 3. 语义 data-* 优先,再扫其它非空 data-*
-  const attrs = (el as any).attributes;
+  const attrs = el.attributes;
   if (attrs) {
     const dataEntries: { name: string; value: string }[] = [];
     for (let i = 0; i < attrs.length; i++) {
@@ -90,9 +90,11 @@ function selfAnchor(el: Element): string | null {
   }
 
   // 5. 唯一 class(某 class 全文档仅一个元素带)
-  const classList = (el as any).classList;
+  const classList = el.classList;
   if (classList && classList.length) {
-    for (const cls of classList) {
+    for (let i = 0; i < classList.length; i++) {
+      const cls = classList.item(i);
+      if (!cls) continue;
       const sel = '.' + CSS.escape(cls);
       if (isUnique(sel)) return sel;
     }

@@ -20,28 +20,31 @@ type RefTestGlobals = typeof globalThis & { __cdpRefs?: unknown[] };
 const refGlobals = globalThis as RefTestGlobals;
 
 // ---- 全局 stub:document.querySelector(各测试填 uniqueSel) ----
-const uniqueSel = new Map<string, any>();
+const uniqueSel = new Map<string, unknown>();
 function stubDocument() {
-  (globalThis as any).document = {
-    querySelector: (sel: string) => uniqueSel.get(sel) ?? null,
-    get body() {
-      return uniqueSel.get('body');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      querySelector: (sel: string) => uniqueSel.get(sel) ?? null,
+      get body() {
+        return uniqueSel.get('body');
+      },
     },
-  };
+  });
 }
 
 // ---- 全局 stub:ShadowRoot(浏览器原生,Node 没有)。inShadow/outermostHost/buildShadowChain
 // 靠 el.getRootNode() instanceof ShadowRoot 判定,故伪造一个类让假 root 实例命中。 ----
 class FakeShadowRoot {
-  host: any;
-  constructor(host: any) {
+  host: unknown;
+  constructor(host: unknown) {
     this.host = host;
   }
 }
-(globalThis as any).ShadowRoot = FakeShadowRoot;
+Object.defineProperty(globalThis, 'ShadowRoot', { value: FakeShadowRoot, configurable: true });
 
 /** CSS.escape stub(genSel 用)。 */
-(globalThis as any).CSS = { escape: (s: string) => s };
+Object.defineProperty(globalThis, 'CSS', { value: { escape: (s: string) => s }, configurable: true });
 
 beforeEach(() => {
   uniqueSel.clear();
@@ -108,7 +111,7 @@ test('refElement: 非元素节点(如文本节点)不入 ref,返回 null', () =>
 });
 
 test('climbAncestors: 不爬返回自身;按层爬父;遇根停', () => {
-  const [a, b, c, leaf] = makeChain('div', 'div', 'div', 'span');
+  const [a, , c, leaf] = makeChain('div', 'div', 'div', 'span');
   assert.equal(climbAncestors(leaf, 0), leaf);
   assert.equal(climbAncestors(leaf, 1), c);
   assert.equal(climbAncestors(leaf, 3), a);
@@ -133,7 +136,7 @@ test('findRoot: 普通 selector 走 document.querySelector', () => {
 });
 
 /** 造假 shadowRoot:含独立 querySelector 表。 */
-function mkShadow(queryMap: Record<string, any>) {
+function mkShadow(queryMap: Record<string, unknown>) {
   return { querySelector: (sel: string) => queryMap[sel] ?? null };
 }
 
@@ -189,33 +192,43 @@ test('findRoot: >>> 周围带空白会被 trim', () => {
  * 故本工具的 shadowScopedChain 自然收口。测试构造时,shadow 内父子关系靠 parentElement 显式接,
  * 但"shadow 根直接子"必须 parentElement=null。
  */
-function mkEl(tag: string): any {
+interface FakeElement {
+  tagName: string;
+  nodeType: 1;
+  parentElement: FakeElement | null;
+  children: FakeElement[];
+  id?: string;
+  shadowRoot?: { querySelector(selector: string): unknown };
+  getRootNode(): unknown;
+}
+
+function mkEl(tag: string): FakeElement {
   return {
     tagName: tag,
     nodeType: 1,
-    parentElement: null as any,
-    children: [] as any[],
-    getRootNode: function (this: any) {
+    parentElement: null,
+    children: [],
+    getRootNode: function (this: FakeElement) {
       return this;
     },
   };
 }
 
 /** 把 el 标记为"在 host 的 shadow 内":getRootNode() 返回 FakeShadowRoot(host)。 */
-function inShadowOf(el: any, host: any) {
+function inShadowOf(el: FakeElement, host: FakeElement) {
   const root = new FakeShadowRoot(host);
   el.getRootNode = () => root;
 }
 
 /** 链接子→父(双向:设置 parentElement + push 到 children)。 */
-function link(parent: any, child: any) {
+function link(parent: FakeElement, child: FakeElement) {
   child.parentElement = parent;
   parent.children.push(child);
 }
 
 /** 让假 document 支持 querySelectorAll(genSel 的 isUnique 用;sel 在 uniqueSel 表里算 1)。 */
 function stubDocAll() {
-  const doc = (globalThis as any).document;
+  const doc = globalThis.document as unknown as { querySelectorAll(selector: string): { length: number } };
   doc.querySelectorAll = (sel: string) => ({ length: uniqueSel.has(sel) ? 1 : 0 });
 }
 
@@ -315,7 +328,7 @@ test('buildShadowChain 与 findRoot 闭环:链能被 findRoot 穿透解析', () 
   inShadowOf(ul, host);
   inShadowOf(a, host);
   uniqueSel.set('#wrap', host);
-  (host as any).shadowRoot = { querySelector: (sel: string) => (sel === 'ul > a' ? a : null) };
+  host.shadowRoot = { querySelector: (sel: string) => (sel === 'ul > a' ? a : null) };
   const chain = buildShadowChain(a);
   assert.equal(chain, '#wrap >>> ul > a');
   assert.equal(findRoot(chain!), a); // findRoot 能穿透回 a(闭环)

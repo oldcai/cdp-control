@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseRules, domainMatch, pathMatch, hostOf, pathOf, matchFolds, loadFolds } from '../src/folds.ts';
@@ -176,7 +176,7 @@ test('matchFolds: path 规则在 pathname 为空(非法 url)时不命中', () =>
 });
 
 test('loadFolds: 文件不存在返回空数组', () => {
-  withTmpDir(dir => {
+  withTmpDir(() => {
     assert.deepEqual(loadFolds(), []);
   });
 });

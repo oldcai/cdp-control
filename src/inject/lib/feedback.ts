@@ -65,6 +65,21 @@ interface FeedbackState {
   document: Document;
 }
 
+interface FeedbackSession {
+  mos: MutationObserver[];
+  state: FeedbackState;
+}
+
+type FeedbackGlobals = typeof globalThis & { __cdpFeedback?: FeedbackSession | null };
+
+const feedbackGlobals = globalThis as FeedbackGlobals;
+
+function parentOrShadowHost(node: Node): Node | null {
+  if (node.parentElement) return node.parentElement;
+  const root = node.getRootNode();
+  return root instanceof ShadowRoot ? root.host : null;
+}
+
 /** shadow 递归观察深度上限(防极深 shadow 树导致 observer 爆炸;B站等典型页面 shadow 嵌套 ≤3)。 */
 const MAX_SHADOW_DEPTH = 3;
 
@@ -149,12 +164,7 @@ function inIgnoredSubtree(node: Node): boolean {
   let n: Node | null = node;
   while (n) {
     if (n.nodeType === 1 && IGNORE_SUBTREE_OF.includes((n as Element).tagName)) return true;
-    if ((n as any).parentElement) {
-      n = (n as any).parentElement;
-      continue;
-    }
-    const root = (n as any).getRootNode && (n as any).getRootNode();
-    n = root && root instanceof ShadowRoot ? (root as ShadowRoot).host : null;
+    n = parentOrShadowHost(n);
   }
   return false;
 }
@@ -166,7 +176,7 @@ function inIgnoredSubtree(node: Node): boolean {
  * video/audio/canvas 子树内的变化整体跳过(弹幕/播放进度噪声)。
  */
 export function startFeedback(): void {
-  if ((globalThis as any).__cdpFeedback) return; // 已启动则复用(防重复装)
+  if (feedbackGlobals.__cdpFeedback) return; // 已启动则复用(防重复装)
   const st: FeedbackState = { added: [], changes: [], attrs: [], document };
   const mos: MutationObserver[] = [];
   // callback 在所有 observer 间共享:统一推 state,并给新增带 shadowRoot 的节点补装。
@@ -213,7 +223,7 @@ export function startFeedback(): void {
     let n: Node | null = target;
     while (n) {
       // n 的根节点(穿过普通 DOM 树到观察根本身):若是已登记的观察根直接返回。
-      const root: Node = (n as any).getRootNode ? (n as any).getRootNode() : n;
+      const root = n.getRootNode();
       if (depthMap.has(root)) return depthMap.get(root)!;
       // 否则跨越 shadow 边界到 host 继续上爬(host 可能在更外层观察根内)。
       if (root instanceof ShadowRoot) {
@@ -243,7 +253,7 @@ export function startFeedback(): void {
     // 深度优先找 root 内带 shadowRoot 的元素,对其 shadowRoot 递归 observeAll。
     const hostEls =
       root instanceof Document || root instanceof ShadowRoot
-        ? (root as any).querySelectorAll('*')
+        ? root.querySelectorAll('*')
         : ((root as Element).querySelectorAll?.('*') ?? []);
     for (const el of Array.from(hostEls)) {
       const sr = (el as Element).shadowRoot;
@@ -253,7 +263,7 @@ export function startFeedback(): void {
   // 给一棵元素子树(运行时新增 host)内所有 shadowRoot 补装 observer;depth 用宿主所在观察根的深度。
   function observeShadowTree(el: Element, hostDepth: number): void {
     if (hostDepth >= MAX_SHADOW_DEPTH) return;
-    const sr = (el as any).shadowRoot;
+    const sr = el.shadowRoot;
     if (sr) observeAll(sr, hostDepth + 1);
     const kids = el.querySelectorAll?.('*') ?? [];
     for (const k of Array.from(kids)) {
@@ -263,19 +273,19 @@ export function startFeedback(): void {
   }
 
   observeAll(document, 0);
-  (globalThis as any).__cdpFeedback = { mos, state: st };
+  feedbackGlobals.__cdpFeedback = { mos, state: st };
 }
 
 /** 收尾反馈:断开 observer,把本次新增内容去重折叠 + 文本变化过滤,返回结构化结果。 */
 export function collectFeedback(opts: { viewport?: boolean } = {}): FeedbackResult {
-  const fb = (globalThis as any).__cdpFeedback;
+  const fb = feedbackGlobals.__cdpFeedback;
   if (!fb) return { blocks: [], changes: [], attrs: [], attrsOverflow: 0, reloaded: false };
   for (const mo of fb.mos as MutationObserver[]) mo.disconnect();
-  (globalThis as any).__cdpFeedback = null;
-  const { added, changes, attrs: pendingAttrs } = fb.state as FeedbackState;
+  feedbackGlobals.__cdpFeedback = null;
+  const { added, changes, attrs: pendingAttrs } = fb.state;
   // 整页重载判定:装 observer 时(document)与采集时(document)是否同一对象。
   // 锚点/历史跳转 URL 变但 document 不变 → reloaded=false(ref 仍有效);整页导航换 document → true。
-  const reloaded = (fb.state as FeedbackState).document !== document;
+  const reloaded = fb.state.document !== document;
   // 顶层新增元素:本次 addedNodes 中、没有元素祖先也在本次新增集合里的节点(去嵌套,避免父容器把整棵子树又算一遍)。
   // 祖先链穿透 shadow:parentElement 在 shadow 边界为 null,改走 composedPath 思路——沿 parentNode/host 上爬。
   const els = added.filter(n => n.nodeType === 1) as Element[];
@@ -361,12 +371,7 @@ function hasAncestorInSet(el: Element, set: Set<Element>): boolean {
   while (n) {
     if (n.nodeType === 1 && set.has(n as Element)) return true;
     // shadow 边界:parentElement 为 null,但 rootNode 是 ShadowRoot 时跳到 host 继续。
-    if ((n as any).parentElement) {
-      n = (n as any).parentElement;
-      continue;
-    }
-    const root = (n as any).getRootNode && (n as any).getRootNode();
-    n = root && root instanceof ShadowRoot ? (root as ShadowRoot).host : null;
+    n = parentOrShadowHost(n);
   }
   return false;
 }

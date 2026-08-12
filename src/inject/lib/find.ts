@@ -14,6 +14,8 @@ export interface OperableArg {
   ancestor?: number;
 }
 
+export type NotFoundResult = { ok: false; refInvalid: true; recovered: Recovered } | { ok: false; err: string };
+
 /** 解析操作目标:ref 命中返回登记的真实元素(可选再爬 ancestor 层);否则 document.querySelector(sel)。找不到返回 null。 */
 export function findTarget(arg: OperableArg): Element | null {
   if (arg.ref != null) {
@@ -30,7 +32,7 @@ export function targetLabel(arg: OperableArg): string {
 
 /** 找不到目标时的结果:ref 失效→自愈(沿 parentRef 跳表找最近存活祖先,局部 view 给 agent 用新 ref 重试);
  * selector 未命中→普通错误。recovered 三态见 recoverRef。 */
-export function notFoundResult(arg: OperableArg): any {
+export function notFoundResult(arg: OperableArg): NotFoundResult {
   if (arg.ref != null) return { ok: false, refInvalid: true, recovered: recoverRef(arg.ref) };
   return { ok: false, err: '未找到: ' + targetLabel(arg) };
 }

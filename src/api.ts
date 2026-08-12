@@ -25,6 +25,72 @@ import { diffTabs } from './tab-diff';
 import { ensureBrowser } from './browser';
 import { mouseClickEvents } from './click-events';
 
+export type RecoveredResult =
+  | { never: true; maxRef: number; msg: string }
+  | { rootRef: number; lines: string[] }
+  | null;
+
+export interface RefAwareResult {
+  ok?: boolean;
+  err?: string;
+  refInvalid?: boolean;
+  recovered?: RecoveredResult;
+}
+
+export interface ViewResult extends RefAwareResult {
+  lines?: string[];
+}
+
+export interface ActionResult extends RefAwareResult {
+  tag?: string;
+  text?: string;
+  shadow?: boolean;
+  selector?: string | null;
+  shadowChain?: string | null;
+}
+
+export interface ArticleResult extends RefAwareResult {
+  lines?: string[];
+  markdown?: string;
+}
+
+export interface FindHit {
+  ref: number;
+  tag: string;
+  text: string;
+  line: string;
+}
+
+export interface FindResult extends RefAwareResult {
+  hits?: FindHit[];
+}
+
+export interface InfoChainEntry {
+  depth: number;
+  tag: string;
+  ref?: number;
+  id?: string;
+  classes?: string[] | string;
+  dataAttrs?: Record<string, string>;
+  aria?: string;
+  role?: string;
+  title?: string;
+}
+
+export interface InfoResult extends RefAwareResult {
+  chain?: InfoChainEntry[];
+  targetDepth?: number;
+  suggested?: string | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isRefInvalid(value: unknown): value is RefAwareResult & { refInvalid: true } {
+  return isRecord(value) && value.refInvalid === true;
+}
+
 /**
  * 统一执行注入脚本并解包结果契约:
  * 注入脚本成功返回任意值(可含 {ok:true});失败返回 {ok:false, err}。
@@ -33,8 +99,9 @@ import { mouseClickEvents } from './click-events';
  */
 async function invoke<T>(target: Target, expr: string, timeout?: number): Promise<T> {
   const r = await evaluateWithSelfHeal(target, expr, timeout);
-  if (r && typeof r === 'object' && (r as any).ok === false && !(r as any).refInvalid)
-    throw new Error((r as any).err || '操作失败');
+  if (isRecord(r) && r.ok === false && r.refInvalid !== true) {
+    throw new Error(typeof r.err === 'string' ? r.err : '操作失败');
+  }
   return r as T;
 }
 
@@ -46,7 +113,7 @@ async function invoke<T>(target: Target, expr: string, timeout?: number): Promis
 async function connectTarget(target: Target): Promise<WebSocket> {
   try {
     return await pageWs(target);
-  } catch (e) {
+  } catch {
     let revived = target;
     try {
       await ensureBrowser();
@@ -59,7 +126,7 @@ async function connectTarget(target: Target): Promise<WebSocket> {
 }
 
 /** 用 connectTarget 连上后执行 JS(替代 transport.evaluate,获得连接失败自愈)。 */
-async function evaluateWithSelfHeal(target: Target, expression: string, timeout?: number): Promise<any> {
+async function evaluateWithSelfHeal(target: Target, expression: string, timeout?: number): Promise<unknown> {
   const ws = await connectTarget(target);
   try {
     return await evalJs(ws, expression, timeout);
@@ -95,7 +162,7 @@ async function withBrowser<T>(fn: (ws: WebSocket) => Promise<T>): Promise<T> {
 export async function open(url = 'about:blank'): Promise<string> {
   await ensureBrowser();
   const { targetId } = await withBrowser(async ws => {
-    const r = await send(ws, 'Target.createTarget', { url, newWindow: false });
+    const r = await send<{ targetId: string }>(ws, 'Target.createTarget', { url, newWindow: false });
     return { targetId: r.targetId };
   });
   maybeSpawnDaemon();
@@ -144,7 +211,7 @@ export interface ViewOpts {
  *   (默认 ±1 屏回弹;scrollPages 改为循环滚 N 屏;scrollTo 先滚到该 selector 元素,如 B站评论区)。
  * 折叠:Node 侧按 target 页 hostname+pathname 读 fold-selectors.csv 命中规则(path glob 限定同域名下页面路径),
  * 传入注入侧 buildView 折叠成一行(跨会话持久)。 */
-export async function view(target: Target, opts: ViewOpts = {}): Promise<any> {
+export async function view(target: Target, opts: ViewOpts = {}): Promise<ViewResult> {
   const folds = matchFolds(hostOf(target.url), pathOf(target.url)).map(r => ({ selector: r.selector, note: r.note }));
   const ignore = loadLinkRules().map(r => r.pattern);
   return invoke(
@@ -193,19 +260,19 @@ export async function fetchPage(url: string): Promise<string[]> {
 }
 
 /** 按 view 的 ref 序号反查稳定 CSS selector,可选 ancestor 向上爬 N 层父级。刷新后 ref 失效,可用返回的 selector 复用。 */
-export async function locate(target: Target, ref: number, ancestor?: number): Promise<any> {
-  return invoke(target, locateExpr(ref, ancestor));
+export async function locate(target: Target, ref: number, ancestor?: number): Promise<ActionResult> {
+  return invoke<ActionResult>(target, locateExpr(ref, ancestor));
 }
 
 /** info:列目标元素(爬 ancestor 后)从 html 到自身的祖先链,每层 tag/id/class/语义 data-* /aria/role + 建议 selector。
  * 供 agent 挑稳定锚点自己写 fold add 这种 uBlock 式短规则(如 #biliMainHeader),而非只靠 genSel 猜一个。 */
-export async function info(target: Target, ref: number, ancestor?: number): Promise<any> {
-  return invoke(target, infoExpr(ref, ancestor));
+export async function info(target: Target, ref: number, ancestor?: number): Promise<InfoResult> {
+  return invoke<InfoResult>(target, infoExpr(ref, ancestor));
 }
 
 /** article:按 view 的 ref 提取子树为格式友好的 Markdown 文章(保序、不截断)。ancestor 可选向上爬父。
  * 链接黑名单(ignore-links.ts 读入的持久规则)命中只留文本、去 URL。 */
-export async function article(target: Target, ref: number, ancestor?: number): Promise<any> {
+export async function article(target: Target, ref: number, ancestor?: number): Promise<ArticleResult> {
   const ignore = loadLinkRules().map(r => r.pattern);
   return invoke(target, articleExpr(ref, ancestor, ignore.length ? ignore : undefined));
 }
@@ -222,7 +289,7 @@ export interface ReadOpts {
   expand?: TargetArg;
   wait?: number;
 }
-export async function read(target: Target, opts: ReadOpts): Promise<any> {
+export async function read(target: Target, opts: ReadOpts): Promise<ArticleResult> {
   if (opts.expand != null) {
     await click(target, opts.expand, { noFeedback: true });
     await sleep(opts.wait ?? 1000);
@@ -253,15 +320,30 @@ export interface FindOpts {
   ancestor?: number;
   all?: boolean;
 }
-export async function find(target: Target, opts: FindOpts = {}): Promise<any> {
-  return invoke(target, findExpr(opts));
+export async function find(target: Target, opts: FindOpts = {}): Promise<FindResult> {
+  return invoke<FindResult>(target, findExpr(opts));
 }
 /** 折叠:会话级临时折叠某 ref 区域(注入 __cdpFolds,刷新失效),或 list 列持久+临时规则。
  * 持久规则改为手动编辑 rules/fold.csv,view 读取自动生效(无命令/脚本写入口)。 */
-export async function fold(target: Target, opts: FoldOpts = {}): Promise<any> {
+export interface FoldResult extends RefAwareResult {
+  folds?: FoldEntry[];
+  persist?: ReturnType<typeof loadFolds>;
+  tmp?: FoldEntry[];
+  tag?: string;
+  selector?: string;
+  note?: string;
+  cleared?: boolean;
+}
+
+export interface FoldEntry {
+  selector: string;
+  note: string;
+}
+
+export async function fold(target: Target, opts: FoldOpts = {}): Promise<FoldResult> {
   if (opts.list) {
     const persist = loadFolds();
-    const tmp = await invoke<{ folds: any[] }>(target, foldExpr({ list: true }));
+    const tmp = await invoke<{ folds: FoldEntry[] }>(target, foldExpr({ list: true }));
     return { ok: true, persist, tmp: tmp.folds };
   }
   return invoke(target, foldExpr({ ref: opts.ref, ancestor: opts.ancestor, note: opts.note }));
@@ -293,7 +375,7 @@ export interface FeedbackResult {
  * 用反馈包裹一次动作:装 observer(注入) → 快照 tab → 执行动作 → 等 feedbackDelay → 收反馈(注入) → 再快照 tab。
  * 动作本身返回 {ok:true,...};这里把结果展开并附上 feedback(内容 + tab diff)。noFeedback 时不做任何等待/观察/diff,返回 feedback:null。
  */
-async function runWithFeedback<T>(
+async function runWithFeedback<T extends object>(
   target: Target,
   doAction: () => Promise<T>,
   opts: FeedbackOpts = {},
@@ -304,8 +386,8 @@ async function runWithFeedback<T>(
   try {
     const result = await doAction();
     // ref 失效自愈:无真实动作发生,跳过反馈等待/采集/tab diff,直接把 recovered 透传给 CLI。
-    if (result && typeof result === 'object' && (result as any).refInvalid) {
-      return { ...result, feedback: null } as any;
+    if (isRefInvalid(result)) {
+      return { ...result, feedback: null };
     }
     await sleep(opts.feedbackDelay ?? 1000);
     const after = await list();
@@ -349,7 +431,7 @@ export interface ClickOpts extends FeedbackOpts {
 interface ClickPrepared {
   ok: boolean;
   refInvalid?: boolean;
-  recovered?: unknown;
+  recovered?: RecoveredResult;
   x?: number;
   y?: number;
   tag?: string;
@@ -386,8 +468,13 @@ export async function click(target: Target, arg: TargetArg, opts: ClickOpts = {}
 }
 
 /** 向 target 页面输入框填值(按 selector 或 ref,派发 input/change;默认带操作后反馈)。 */
-export async function fill(target: Target, arg: TargetArg, value: string, opts: FeedbackOpts = {}): Promise<any> {
-  return runWithFeedback(target, () => invoke(target, inject('fill', { ...normArg(arg), value })), opts);
+export async function fill(
+  target: Target,
+  arg: TargetArg,
+  value: string,
+  opts: FeedbackOpts = {},
+): Promise<ActionResult & { feedback: FeedbackResult | null }> {
+  return runWithFeedback(target, () => invoke<ActionResult>(target, inject('fill', { ...normArg(arg), value })), opts);
 }
 
 // 共享轮询原语:反复 eval 一段 JS 布尔表达式直到真值或超时。desc 用于超时报错文案。
@@ -414,20 +501,25 @@ export async function pollWait(
   }
 }
 
+export interface PollWaitOptions {
+  timeout?: number;
+  interval?: number;
+}
+
 /** 等 target 页面上出现匹配 selector 的元素(轮询),超时抛错。 */
-export async function waitFor(target: Target, selector: string, opts?: any): Promise<boolean> {
+export async function waitFor(target: Target, selector: string, opts?: PollWaitOptions): Promise<boolean> {
   return pollWait(target, `!!document.querySelector(${JSON.stringify(selector)})`, selector, opts);
 }
 
 /** 轮询执行 JS 布尔表达式直到返回真值,超时抛错。 */
-export async function waitForFn(target: Target, expression: string, opts?: any): Promise<boolean> {
+export async function waitForFn(target: Target, expression: string, opts?: PollWaitOptions): Promise<boolean> {
   return pollWait(target, expression, expression, opts);
 }
 
 /** 截图 target 页面到文件,返回文件路径。写文件在关闭 ws 之后做。 */
 export async function screenshot(target: Target, file?: string): Promise<string> {
   const r = await withPage(target, async ws => {
-    return await send(ws, 'Page.captureScreenshot', { format: 'png' });
+    return await send<{ data?: string }>(ws, 'Page.captureScreenshot', { format: 'png' });
   });
   if (!r.data) throw new Error('截图失败:无数据');
   const out = file || `screenshot_${Date.now()}.png`;
@@ -436,26 +528,41 @@ export async function screenshot(target: Target, file?: string): Promise<string>
 }
 
 /** 聚焦 target 页面上匹配 selector 或 ref 的元素(默认带操作后反馈)。 */
-export async function focus(target: Target, arg: TargetArg, opts: FeedbackOpts = {}): Promise<any> {
-  return runWithFeedback(target, () => invoke(target, inject('focus', normArg(arg))), opts);
+export async function focus(
+  target: Target,
+  arg: TargetArg,
+  opts: FeedbackOpts = {},
+): Promise<ActionResult & { feedback: FeedbackResult | null }> {
+  return runWithFeedback(target, () => invoke<ActionResult>(target, inject('focus', normArg(arg))), opts);
 }
 
 /** 返回 target 页面当前焦点元素(document.activeElement)信息,无焦点返回 null。 */
-export async function getFocus(target: Target): Promise<any> {
-  return invoke(target, inject('get-focus'));
+export interface FocusInfo {
+  tag: string;
+  text?: string;
+  id?: string;
+  selector?: string | null;
+}
+
+export async function getFocus(target: Target): Promise<FocusInfo | null> {
+  return invoke<FocusInfo | null>(target, inject('get-focus'));
 }
 
 /** 在 target 页面按真实键盘事件(组合键用 Ctrl+Shift+A 写法;默认带操作后反馈,如 PageDown 滚动触发懒加载)。
  * 滚动类键(PageUp/PageDown/Home/End)的 keyDown 透传 CDP commands(如 scrollPageDown)触发浏览器内置滚动
  * ——光发 keyDown/keyUp 事件到 JS 层不触发原生滚动。 */
-export async function pressKey(target: Target, keySpec: string, opts: FeedbackOpts = {}): Promise<any> {
+export async function pressKey(
+  target: Target,
+  keySpec: string,
+  opts: FeedbackOpts = {},
+): Promise<{ ok: true; feedback: FeedbackResult | null }> {
   const { key, code, kc, modifiers, commands } = parseKeySpec(keySpec);
   return runWithFeedback(
     target,
     async () => {
       await withPage(target, async ws => {
         // keyDown 带 commands 触发原生滚动(仅滚动类键有 commands);keyUp 不需要重复传。
-        const down: any = {
+        const down: Record<string, unknown> = {
           type: 'keyDown',
           key,
           code,
@@ -481,16 +588,24 @@ export async function pressKey(target: Target, keySpec: string, opts: FeedbackOp
 }
 
 /** 将鼠标移到 target 页面指定元素中心(按 selector 或 ref,触发 mouseover/mouseenter;默认带操作后反馈)。 */
-export async function hover(target: Target, arg: TargetArg, opts: FeedbackOpts = {}): Promise<any> {
+export async function hover(
+  target: Target,
+  arg: TargetArg,
+  opts: FeedbackOpts = {},
+): Promise<ActionResult & { feedback: FeedbackResult | null }> {
   return runWithFeedback(
     target,
     async () => {
-      const pos = await invoke<{ ok: boolean; refInvalid?: boolean; x: number; y: number }>(
-        target,
-        inject('hover', normArg(arg)),
-      );
+      const pos = await invoke<{
+        ok: boolean;
+        refInvalid?: boolean;
+        recovered?: RecoveredResult;
+        x?: number;
+        y?: number;
+      }>(target, inject('hover', normArg(arg)));
       if (pos?.refInvalid) return pos; // ref 失效:注入侧已自愈,不 dispatch 鼠标
       if (!pos?.ok) throw new Error('未找到: ' + (typeof arg === 'string' ? arg : 'ref=' + arg.ref));
+      if (typeof pos.x !== 'number' || typeof pos.y !== 'number') throw new Error('悬停坐标缺失');
       await withPage(target, async ws => {
         await send(ws, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: pos.x, y: pos.y });
       });
