@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {
   combineAddressStates,
   prepareFixedPort,
+  probeHostCdp,
   probePortAddresses,
   settleFixedPortLaunch,
   reclaimFixedPortListeners,
@@ -89,6 +90,50 @@ test('resolveSocketHosts: DNS 主机使用 all:true 保留所有去重地址', a
   assert.deepEqual(hosts, ['192.0.2.44', '2001:db8::44']);
 });
 
+test('probeHostCdp: 主连接未就绪时复用其他解析地址的健康 CDP', async () => {
+  const calls: string[] = [];
+  assert.deepEqual(
+    await probeHostCdp({
+      primary: async () => {
+        calls.push('primary');
+        return { ready: false };
+      },
+      resolveAddresses: async () => {
+        calls.push('resolve');
+        return ['192.0.2.44', '2001:db8::44'];
+      },
+      address: async host => {
+        calls.push(`address:${host}`);
+        return host === '2001:db8::44' ? { ready: true, browser: 'Chrome/healthy-other-address' } : { ready: false };
+      },
+    }),
+    { ready: true, browser: 'Chrome/healthy-other-address', address: '2001:db8::44' },
+  );
+  assert.deepEqual(calls, ['primary', 'resolve', 'address:192.0.2.44', 'address:2001:db8::44']);
+});
+
+test('probeHostCdp: 主连接健康时只做一次探活', async () => {
+  const calls: string[] = [];
+  assert.deepEqual(
+    await probeHostCdp({
+      primary: async () => {
+        calls.push('primary');
+        return { ready: true, browser: 'Chrome/primary' };
+      },
+      resolveAddresses: async () => {
+        calls.push('resolve');
+        return ['127.0.0.1', '::1'];
+      },
+      address: async host => {
+        calls.push(`address:${host}`);
+        return { ready: false };
+      },
+    }),
+    { ready: true, browser: 'Chrome/primary' },
+  );
+  assert.deepEqual(calls, ['primary']);
+});
+
 test('probePortAddresses: localhost 所有地址都逐一 connect 再逐一 bind', async () => {
   const calls: string[] = [];
   const hosts = await resolveSocketHosts('localhost', async () => {
@@ -137,24 +182,56 @@ test('combineAddressStates: 任一非可忽略 unknown 都压过 busy，阻止�
   );
 });
 
-test('waitForCdpReady: 子进程早退后即使端口瞬时空闲也有界复探并发 CDP', async () => {
+test('waitForCdpReady: 子进程早退后对并发 CDP 有界复探，但保留早退交由状态机分类', async () => {
   let now = 0;
   let probes = 0;
-  await waitForCdpReady(
-    {
-      probe: async () => ++probes === 3,
-      exitReason: () => 'fixture child exited(code=0)',
-      sleep: async ms => {
-        now += ms;
-      },
-      now: () => now,
-    },
-    20_000,
-    3_000,
-    1_000,
+  await assert.rejects(
+    () =>
+      waitForCdpReady(
+        {
+          probe: async () => ++probes === 3,
+          exitReason: () => 'fixture child exited(code=0)',
+          sleep: async ms => {
+            now += ms;
+          },
+          now: () => now,
+        },
+        20_000,
+        3_000,
+        1_000,
+      ),
+    /fixture child exited\(code=0\)/,
   );
   assert.equal(probes, 3);
   assert.equal(now, 2_000);
+});
+
+test('settleFixedPortLaunch: exact child 早退后并发 CDP 就绪必须分类为 reuse', async () => {
+  let now = 0;
+  let waitProbes = 0;
+  const d = dependencies({ probes: [{ ready: true, browser: 'Chrome/concurrent-owner' }] });
+
+  const result = await settleFixedPortLaunch(
+    24129,
+    () =>
+      waitForCdpReady(
+        {
+          probe: async () => ++waitProbes === 3,
+          exitReason: () => 'fixture exact child exited(code=0)',
+          sleep: async ms => {
+            now += ms;
+          },
+          now: () => now,
+        },
+        20_000,
+        3_000,
+        1_000,
+      ),
+    d,
+  );
+
+  assert.deepEqual(result, { action: 'reuse', browser: 'Chrome/concurrent-owner' });
+  assert.deepEqual(d.calls, ['probe:24129']);
 });
 
 test('waitForCdpReady: 早退宽限结束仍无健康 CDP 时保留真实退出原因', async () => {
@@ -229,6 +306,51 @@ test('planListenerCleanup: 端点 busy 但 PID 快照换代时 fail closed', asy
     }),
     { action: 'stillUp' },
   );
+});
+
+test('planListenerCleanup: 异步枚举期间权威配置变化时立即中止', async () => {
+  const authorityChanged = new Error('kill authority changed fixture');
+  let authoritative = true;
+  const calls: string[] = [];
+
+  await assert.rejects(
+    () =>
+      planListenerCleanup(9222, {
+        assertAuthority: () => {
+          calls.push(`authority:${authoritative}`);
+          if (!authoritative) throw authorityChanged;
+        },
+        portState: async () => {
+          calls.push('state');
+          return { state: 'busy' };
+        },
+        listenerPids: async () => {
+          calls.push('listeners');
+          authoritative = false;
+          return [921];
+        },
+      }),
+    error => error === authorityChanged,
+  );
+  assert.deepEqual(calls, ['authority:true', 'state', 'authority:true', 'listeners', 'authority:false']);
+});
+
+test('reclaimFixedPortListeners: 权威配置已变化时在首个 kill 前 fail closed', async () => {
+  const authorityChanged = new Error('kill authority changed before destructive operation fixture');
+  const killed: number[] = [];
+  await assert.rejects(
+    () =>
+      reclaimFixedPortListeners(9222, [931, 932], {
+        assertAuthority: () => {
+          throw authorityChanged;
+        },
+        killPid: pid => killed.push(pid),
+        portState: async () => ({ state: 'free' }),
+        sleep: async () => {},
+      }),
+    error => error === authorityChanged,
+  );
+  assert.deepEqual(killed, []);
 });
 
 function dependencies(
@@ -785,4 +907,9 @@ test('parseNetstatListenersForHosts: 全局有 direct 时不混入另一 host �
 test('parseLsofListeners: IPv6 合法非压缩写法与 lsof 压缩地址按同一端点匹配', () => {
   const out = ['p777', 'f7', 'tIPv6', 'n[::1]:9222'].join('\n');
   assert.deepEqual(parseLsofListeners(out, 9222, '[0:0:0:0:0:0:0:1]'), [777]);
+});
+
+test('parseLsofListeners: IPv4-mapped bracketed IPv6 host 与 IPv4 listener 按同一端点归属', () => {
+  const out = ['p778', 'f7', 'tIPv4', 'n127.0.0.1:9222'].join('\n');
+  assert.deepEqual(parseLsofListeners(out, 9222, '[::ffff:127.0.0.1]'), [778]);
 });

@@ -7,7 +7,7 @@ import { unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { pageWs, send, listTargets, resolve, evaluate, sleep, PORT, Target } from './transport';
+import { pageWs, send, listTargets, resolve, evaluate, sleep, CONNECTION_HOST, PORT, Target } from './transport';
 import { inject, readExpr } from './inject-loader';
 import { cdpNoAutostart } from './paths.ts';
 
@@ -23,7 +23,7 @@ async function spawnDaemon(): Promise<void> {
   const child = spawn(process.execPath, [script, '__daemon'], {
     detached: true,
     stdio: 'ignore',
-    env: { ...process.env, CDP_PORT: String(PORT) },
+    env: { ...process.env, CDP_HOST: CONNECTION_HOST, CDP_PORT: String(PORT) },
   });
   child.unref();
 }

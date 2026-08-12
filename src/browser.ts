@@ -10,7 +10,7 @@ import { spawn, spawnSync, execFile } from 'node:child_process';
 import { createServer, connect } from 'node:net';
 import { lookup } from 'node:dns/promises';
 import { promisify } from 'node:util';
-import { getJson, setPort, HOST, PORT, sleep } from './transport';
+import { getJson, setEndpointHost, setPort, HOST, PORT, sleep } from './transport';
 import { maybeSpawnDaemon } from './monitor';
 import { cdpNoAutostart } from './paths.ts';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
@@ -36,10 +36,12 @@ import {
   parseLsofListeners,
   parseLsofListenersForHosts,
   planListenerCleanup,
+  probeHostCdp,
   resolveSocketHosts,
   type FixedPortDependencies,
   type AddressPortState,
   type PortState,
+  type ProbeResult,
   FixedPortLaunchAttempt,
   waitForCdpReady,
 } from './browser-port';
@@ -121,12 +123,8 @@ async function waitReady(
   try {
     const dependencies = {
       probe: async (probeTimeoutMs: number) => {
-        try {
-          const value: unknown = await getJson('/json/version', probeTimeoutMs);
-          return hasCdpWebSocket(value);
-        } catch {
-          return false;
-        }
+        const probe = await probeReady(probeTimeoutMs);
+        return probe.ready;
       },
       exitReason: () => earlyExit,
       sleep,
@@ -139,19 +137,37 @@ async function waitReady(
   }
 }
 
-/** ready 探活(一次 GET,顺带拿浏览器名)。 */
-async function probeReady(timeoutMs?: number): Promise<{ ready: boolean; browser?: string }> {
-  try {
-    const v: unknown = await getJson('/json/version', timeoutMs);
-    if (!hasCdpWebSocket(v)) return { ready: false };
-    const browser =
-      typeof v === 'object' && v !== null && typeof (v as Record<string, unknown>).Browser === 'string'
-        ? (v as Record<string, string>).Browser
-        : '';
-    return { ready: true, browser: describeBrowser(browser) };
-  } catch {
-    return { ready: false };
-  }
+function cdpProbeResult(value: unknown): ProbeResult {
+  if (!hasCdpWebSocket(value)) return { ready: false };
+  const browser =
+    typeof value === 'object' && value !== null && typeof (value as Record<string, unknown>).Browser === 'string'
+      ? (value as Record<string, string>).Browser
+      : '';
+  return { ready: true, browser: describeBrowser(browser) };
+}
+
+async function probeResolvedCdp(address: string, timeoutMs: number): Promise<ProbeResult> {
+  const urlHost = address.includes(':') ? `[${address}]` : address;
+  const response = await fetch(`http://${urlHost}:${Number(PORT)}/json/version`, {
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) return { ready: false };
+  const value: unknown = await response.json();
+  return cdpProbeResult(value);
+}
+
+/**
+ * ready 探活：健康主连接仍只做一次 GET。主连接未就绪时再逐解析地址复核，
+ * 防止 localhost/DNS 某一地址的健康 CDP 被后续多地址 listener 并集误杀。
+ */
+async function probeReady(timeoutMs = 5000): Promise<ProbeResult> {
+  const probe = await probeHostCdp({
+    primary: async () => cdpProbeResult(await getJson('/json/version', timeoutMs)),
+    resolveAddresses: resolvedSocketHosts,
+    address: address => probeResolvedCdp(address, timeoutMs),
+  });
+  if (probe.ready && probe.address) setEndpointHost(probe.address);
+  return probe;
 }
 
 /** 忙端口的并发冷启动宽限；单次请求和轮询睡眠都受同一 deadline 约束。 */
@@ -456,6 +472,8 @@ async function probeAuthoritativeConfig(): Promise<{
   let config = loadConfigOrNull();
   for (let changeCount = 0; changeCount <= 3; changeCount++) {
     const observedPort = effectiveBrowserPort(config);
+    // 每轮先从用户配置的 hostname 重新选端点；如果选中其它数值地址，probeReady 会 pin 住它。
+    setEndpointHost(HOST);
     setPort(observedPort);
     const probe = await probeReady();
     const authority = reloadBrowserAuthority(observedPort, loadConfigOrNull, setPort);
@@ -604,10 +622,11 @@ export async function killBrowser(): Promise<KillResult> {
     return { ok: false, port: 9222, reason: 'broken' };
   }
   const port = cfg.port;
-  const plan = await planListenerCleanup(port, { portState, listenerPids });
+  const assertAuthority = browserAuthorityGuard(cfg);
+  const plan = await planListenerCleanup(port, { assertAuthority, portState, listenerPids });
   if (plan.action === 'noProcess') return { ok: true, port, reason: 'noProcess' };
   if (plan.action === 'stillUp') return { ok: false, port, reason: 'stillUp' };
-  const release = await reclaimFixedPortListeners(port, plan.pids, { killPid, portState, sleep });
+  const release = await reclaimFixedPortListeners(port, plan.pids, { assertAuthority, killPid, portState, sleep });
   if (release.state !== 'free') return { ok: false, port, reason: 'stillUp' };
   return release.killFailures.length ? { ok: false, port, reason: 'killFailed' } : { ok: true, port, reason: 'killed' };
 }

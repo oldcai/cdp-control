@@ -7,6 +7,8 @@ import { isIP } from 'node:net';
 export interface ProbeResult {
   ready: boolean;
   browser?: string;
+  /** 主 hostname 未选中健康端点时，需要 pin 的已解析数值地址。 */
+  address?: string;
 }
 export type PortState = { state: 'free' } | { state: 'busy' } | { state: 'unknown'; reason: string };
 export type AddressPortState =
@@ -77,6 +79,45 @@ export async function resolveSocketHosts(host: string, lookupAll: LookupAll): Pr
   const hosts = [...new Set(addresses.map(entry => canonicalAddress(entry.address)))];
   if (!hosts.length) throw new Error('DNS 未返回地址');
   return hosts;
+}
+
+export interface HostCdpProbeDependencies {
+  primary(): Promise<ProbeResult>;
+  resolveAddresses(): Promise<string[]>;
+  address(host: string): Promise<ProbeResult>;
+}
+
+/**
+ * 主 hostname 连接未就绪时检查全部解析地址。若其中已有健康 CDP，不能再把同一
+ * host 范围的 listener 并集当作非健康占用者回收；返回数值地址交由调用方 pin 并复用。
+ */
+export async function probeHostCdp(deps: HostCdpProbeDependencies): Promise<ProbeResult> {
+  let primary: ProbeResult = { ready: false };
+  try {
+    primary = await deps.primary();
+  } catch {}
+  if (primary.ready) return primary;
+
+  let addresses: string[];
+  try {
+    addresses = await deps.resolveAddresses();
+  } catch {
+    // portState 会将同一解析失败归类为 unknown，由固定端口门禁报真因。
+    return { ready: false };
+  }
+
+  const resolved = await Promise.all(
+    addresses.map(async address => {
+      try {
+        return { address, probe: await deps.address(address) };
+      } catch {
+        return { address, probe: { ready: false } satisfies ProbeResult };
+      }
+    }),
+  );
+  const healthy = resolved.find(result => result.probe.ready);
+  if (healthy) return { ...healthy.probe, address: healthy.address };
+  return { ready: false };
 }
 
 const FAMILY_OFF = new Set(['EAFNOSUPPORT', 'EPFNOSUPPORT', 'ENETUNREACH', 'EADDRNOTAVAIL', 'EHOSTUNREACH', 'EINVAL']);
@@ -154,7 +195,13 @@ export async function waitForCdpReady(
       ready = await deps.probe(Math.min(1_000, remaining));
     } catch {}
     deps.assertAuthority?.();
-    if (ready) return;
+    // exact child 已退出时，端点变健康只能属于并发调用者。抛出早退真因，
+    // 交给 settleFixedPortLaunch 重进门禁并正确分类为 reuse，不得谎报本轮 launch 成功。
+    if (ready) {
+      const exited = deps.exitReason() ?? rememberedExit;
+      if (exited) throw new Error(exited);
+      return;
+    }
 
     const exitAfterProbe = deps.exitReason();
     if (exitAfterProbe && exitDeadline === null) {
@@ -197,13 +244,19 @@ export type ListenerCleanupPlan = { action: 'kill'; pids: number[] } | { action:
 
 type ListenerReclaimDependencies = Pick<
   FixedPortDependencies,
-  'killPid' | 'portState' | 'sleep' | 'releaseTimeoutMs' | 'releasePollMs'
+  'assertAuthority' | 'killPid' | 'portState' | 'sleep' | 'releaseTimeoutMs' | 'releasePollMs'
 >;
 
 /** 对全部 listener 做 best-effort 回收；单个失败不阻断其余 PID，并保留每个真因。 */
-export function killListenerPids(pids: number[], killPid: (pid: number) => void): string[] {
+export function killListenerPids(
+  pids: number[],
+  killPid: (pid: number) => void,
+  beforeKill?: (pid: number) => void,
+): string[] {
   const failures: string[] = [];
   for (const pid of pids) {
+    // 权威变化不是某个 PID 的 best-effort 失败；必须在破坏性操作外层立即抛出。
+    beforeKill?.(pid);
     try {
       killPid(pid);
     } catch (cause) {
@@ -220,17 +273,22 @@ export function killListenerPids(pids: number[], killPid: (pid: number) => void)
  */
 export async function planListenerCleanup(
   port: number,
-  deps: Pick<FixedPortDependencies, 'portState' | 'listenerPids'>,
+  deps: Pick<FixedPortDependencies, 'assertAuthority' | 'portState' | 'listenerPids'>,
 ): Promise<ListenerCleanupPlan> {
+  assertAuthority(port, deps);
   const initialState = await deps.portState(port);
+  assertAuthority(port, deps);
   if (initialState.state === 'free') return { action: 'noProcess' };
   if (initialState.state === 'unknown') return { action: 'stillUp' };
 
   const firstPids = normalizePids(await deps.listenerPids(port));
+  assertAuthority(port, deps);
   const finalState = await deps.portState(port);
+  assertAuthority(port, deps);
   if (finalState.state === 'free') return { action: 'noProcess' };
   if (finalState.state === 'unknown') return { action: 'stillUp' };
   const finalPids = normalizePids(await deps.listenerPids(port));
+  assertAuthority(port, deps);
   if (!firstPids.length || !samePids(firstPids, finalPids)) return { action: 'stillUp' };
   return { action: 'kill', pids: finalPids };
 }
@@ -261,15 +319,21 @@ export async function reclaimFixedPortListeners(
   pids: number[],
   deps: ListenerReclaimDependencies,
 ): Promise<ListenerReclaimResult> {
-  const killFailures = killListenerPids(pids, deps.killPid);
+  const killFailures = killListenerPids(pids, deps.killPid, () => assertAuthority(port, deps));
+  assertAuthority(port, deps);
 
   const timeoutMs = deps.releaseTimeoutMs ?? 3000;
   const pollMs = deps.releasePollMs ?? 300;
   const attempts = Math.floor(timeoutMs / pollMs);
   for (let i = 0; i <= attempts; i++) {
+    assertAuthority(port, deps);
     const release = await deps.portState(port);
+    assertAuthority(port, deps);
     if (release.state !== 'busy') return { ...release, killFailures };
-    if (i < attempts) await deps.sleep(pollMs);
+    if (i < attempts) {
+      await deps.sleep(pollMs);
+      assertAuthority(port, deps);
+    }
   }
   return { state: 'busy', killFailures };
 }
@@ -397,7 +461,7 @@ function samePids(left: number[], right: number[]): boolean {
   return left.every(pid => rightSet.has(pid));
 }
 
-function assertAuthority(port: number, deps: FixedPortDependencies): void {
+function assertAuthority(port: number, deps: Pick<FixedPortDependencies, 'assertAuthority'>): void {
   deps.assertAuthority?.(port);
 }
 
@@ -412,10 +476,20 @@ function canonicalAddress(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
   if (!normalized.includes(':')) return normalized;
   try {
-    return new URL(`http://[${normalized}]/`).hostname.replace(/^\[/, '').replace(/\]$/, '');
+    const canonical = new URL(`http://[${normalized}]/`).hostname.replace(/^\[/, '').replace(/\]$/, '');
+    return mappedIpv4Address(canonical) ?? canonical;
   } catch {
     return normalized;
   }
+}
+
+/** URL 会把 IPv4-mapped IPv6 正规化为 `::ffff:7f00:1`；监听工具通常报告等价 IPv4。 */
+function mappedIpv4Address(address: string): string | null {
+  const match = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(address);
+  if (!match) return null;
+  const high = Number.parseInt(match[1], 16);
+  const low = Number.parseInt(match[2], 16);
+  return `${high >>> 8}.${high & 0xff}.${low >>> 8}.${low & 0xff}`;
 }
 
 function hostFamilies(host: string): string[] {
