@@ -26,8 +26,10 @@
 
 ### 2. 身份不是接管权限
 
-- daemon 的**逻辑身份**仅由三项组成：规范化 `CDP_HOME`、已经 pin 的 CDP host、规范化十进制 CDP port。
+- daemon 的**逻辑身份**仅由三项组成：规范化 `CDP_HOME`、已经 pin 的 CDP host、权威 CDP port 的稳定 wire 表示。
   它回答“这个 watcher 服务哪个用户状态目录和哪个浏览器 endpoint”。targets、PID、版本和健康阶段都不属于身份。
+- v0 identity 的 wire 表示已经发布，必须与 frozen `/health` 一起保持逐字段兼容；不能在引入 v1 时顺手改写
+  host/port 表示。v1 可在下一次 major 升级显式改变 identity 编码，但同一 major 内只能新增可选字段。
 - `home + host + port` 全等才是 `same identity`；只有 home 相同而 endpoint 不同是 `owned-stale`；
   home 不同是 `foreign`。
 - `same identity` 只允许复用兼容且 `ready` 的 daemon，不授予 signal 权限。
@@ -47,7 +49,7 @@
 | `legacy` | 精确 pre-identity schema | 二次确认，再按 legacy 进程门禁退出 |
 | `foreign` | 其它 service、不同 home、redirect 或不属于冻结 schema 的响应 | 永不退出、永不覆盖、显式报占用 |
 | `incompatible` | discriminator 属于本服务，但 major 未知或 v1 契约畸形 | 永不退出、永不降级回退、显式报告版本/原因 |
-| `unreachable` | loopback 连接失败 | spawn 前再 probe；仍不可达才 spawn |
+| `unreachable` | 独立 TCP probe 明确得到 `ECONNREFUSED`，确认无 loopback listener | spawn 前再 probe；仍不可达才 spawn |
 
 `/health/v1` 的 phase 只有 `starting | ready | stopping`。listener bind 后可以进入 `starting`，但只有 PID 已发布且
 initial sync 完成后才进入 `ready`。因此“端口能响应”不再等于“watcher 已就绪”。
@@ -61,6 +63,11 @@ initial sync 完成后才进入 `ready`。因此“端口能响应”不再等�
   `foreign`/`incompatible`/retirable 响应立即失败。
 - 自动拉起保持不阻塞主命令，但 `maybeSpawnDaemon` 不得吞掉错误；至少向 stderr 输出稳定前缀和具体分类原因。
 - 所有 wait 都有次数上限；超时错误必须区分“transition 未完成”“owned daemon 无法退出”和“新 daemon 未就绪”。
+- target attach 按最多 8 个的公平轮转批次执行；同批并行、批次不重叠，避免大量 tabs 造成 FD/command storm。
+  initial sync 完成第一批，剩余 target 由后续 500ms sync 继续覆盖。其共享上界为 target list 5s +
+  最慢 target 的 WS 8s + 三个 CDP 命令各 5s。
+  spawn-to-ready 还包含 bind 前最多 10s 的 process birth 读取，默认等待 40s，必须完整覆盖该 38s 上界，
+  不能让合法 detached daemon 稍后 ready 而调用者先假失败。
 
 ## 为什么这不是第十个条件补丁
 
