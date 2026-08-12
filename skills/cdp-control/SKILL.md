@@ -143,7 +143,7 @@ cdp-control run "./scripts/你的脚本.js"
 | `logs [--level error,warn] [--since <ms>] [--json]` | 读控制台日志 |
 | `run <脚本文件>` | 执行自动化脚本(全局 `cdp` API,可顶层 await;**返回非 undefined 则打印**) |
 
-环境变量:`CDP_HOME`(整体覆盖 `browser.json`/`user-data`/`rules`,默认 `~/.cdp-control`)、`CDP_HOST`(默认 `127.0.0.1`)、`CDP_PORT`(低级传输初值；浏览器连接会被权威 `browser.json.port` 覆盖，无配置 bootstrap 固定 9222)、`CDP_NO_AUTOSTART=1`(端点不就绪时只报错、不冷启动)、`CDP_LOGS_PORT`(daemon,默认 9333)、`CDP_RULES_DIR`(实时规则目录的更高优先级覆盖)、`CDP_FOLD_FILE`/`CDP_IGNORE_LINKS_FILE`(单文件路径覆盖,测试用)。
+环境变量:`CDP_HOME`(整体覆盖 `browser.json`/`user-data`/`rules`,默认 `~/.cdp-control`)、`CDP_HOST`(默认 `127.0.0.1`；支持 `localhost`、DNS 主机和 bracketed IPv6，端口门禁会检查全部解析地址)、`CDP_PORT`(低级传输初值；浏览器连接会被权威 `browser.json.port` 覆盖，无配置 bootstrap 固定 9222)、`CDP_NO_AUTOSTART=1`(端点不就绪时只报错、不冷启动)、`CDP_LOGS_PORT`(daemon,默认 9333)、`CDP_RULES_DIR`(实时规则目录的更高优先级覆盖)、`CDP_FOLD_FILE`/`CDP_IGNORE_LINKS_FILE`(单文件路径覆盖,测试用)。
 
 **recipe 编写**:`rules/recipes/<site>.js`(作者代码直接住 git,单一来源)一文件一站点,导出**规则数组** `module.exports = [{ name, scope: '<hostname+pathname glob>', async extract(cdp, ctx) { … return { lines: [文本行(可内嵌 [ref=N])] }; } }, …]`。`scope` 可为字符串或数组(一抽取服务多 URL 形态);同文件多元素=同站点多布局。`extract` 内可用完整 `cdp` api(`cdp.view` 拿树与 ref、`cdp.article` 取正文、`cdp.read` 展开再读、`cdp.eval` 按站点 selector 抓结构)。**三个引擎原语替你接管可复用/易错部分**:
 - **只读探针 `window.__cdpProbe`**(view 建树后自动注入):eval 里 `const { refOf, text } = window.__cdpProbe`,`refOf(el)` 反查已建树 ref(未命中 `null`,绝不按需注册)。不再手抄 refOf 样板。

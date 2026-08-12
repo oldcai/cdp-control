@@ -2,12 +2,17 @@
  * browser-port.ts — 固定 CDP 端口的状态判断、监听者解析与安全回收编排。
  * 网络/进程副作用由 browser.ts 注入；核心状态机可纯单测。
  */
+import { isIP } from 'node:net';
 
 export interface ProbeResult {
   ready: boolean;
   browser?: string;
 }
 export type PortState = { state: 'free' } | { state: 'busy' } | { state: 'unknown'; reason: string };
+export type AddressPortState =
+  | { address: string; state: 'free' }
+  | { address: string; state: 'busy' }
+  | { address: string; state: 'unknown'; code: string; reason: string };
 export type FixedPortAction = { action: 'reuse'; browser?: string } | { action: 'launch'; port: number };
 
 /** 端口门禁失败；调用方据此区分“不得继续”的安全错误与某个浏览器候选自身启动失败。 */
@@ -15,6 +20,7 @@ export class FixedPortError extends Error {}
 
 /** 只记录并清理由本轮固定端口流程实际 spawn 的句柄，避免误杀进程内历史浏览器。 */
 export class FixedPortLaunchAttempt<Process> {
+  /** 当前仍由本轮负责终止的进程；退出后立即释放该归属。 */
   launched: Process | null = null;
 
   /** 记录终止所有权，并返回不受后续 release 影响的本轮精确句柄。 */
@@ -51,6 +57,122 @@ export function lsofListenerArgs(port: number): string[] {
   return ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpnt'];
 }
 
+/** HTTP URL 中 IPv6 需要括号，Node socket API 则必须使用裸地址。 */
+export function socketHost(host: string): string {
+  return host.trim().replace(/^\[([^\]]+)\]$/, '$1');
+}
+
+export interface LookupAddress {
+  address: string;
+}
+
+export type LookupAll = (hostname: string, options: { all: true }) => Promise<LookupAddress[]>;
+
+/** 数值 host 直接使用；localhost 显式覆盖双回环；DNS 主机必须保留 all:true 的全部地址。 */
+export async function resolveSocketHosts(host: string, lookupAll: LookupAll): Promise<string[]> {
+  const normalized = socketHost(host).toLowerCase();
+  if (normalized === 'localhost') return ['127.0.0.1', '::1'];
+  if (isIP(normalized)) return [canonicalAddress(normalized)];
+  const addresses = await lookupAll(normalized, { all: true });
+  const hosts = [...new Set(addresses.map(entry => canonicalAddress(entry.address)))];
+  if (!hosts.length) throw new Error('DNS 未返回地址');
+  return hosts;
+}
+
+const FAMILY_OFF = new Set(['EAFNOSUPPORT', 'EPFNOSUPPORT', 'ENETUNREACH', 'EADDRNOTAVAIL', 'EHOSTUNREACH', 'EINVAL']);
+
+/** 多地址 host 的探测结论：任一 busy 优先；仅跳过本机不可用的回环地址族。 */
+export function combineAddressStates(states: AddressPortState[]): PortState {
+  if (states.some(state => state.state === 'busy')) return { state: 'busy' };
+  const unknown = states.filter(
+    (state): state is Extract<AddressPortState, { state: 'unknown' }> =>
+      state.state === 'unknown' && !loopbackFamilyUnavailable(state.address, state.code),
+  );
+  if (unknown.length) return { state: 'unknown', reason: unknown.map(state => state.reason).join('; ') };
+  if (states.some(state => state.state === 'free')) return { state: 'free' };
+  return { state: 'unknown', reason: '没有可用的本机地址族' };
+}
+
+function loopbackFamilyUnavailable(address: string, code: string): boolean {
+  const normalized = canonicalAddress(address);
+  const loopback = normalized === '::1' || normalized === '::ffff:127.0.0.1' || /^127\./.test(normalized);
+  return loopback && FAMILY_OFF.has(code);
+}
+
+export interface PortAddressDependencies {
+  connect(port: number, address: string): Promise<AddressPortState>;
+  bind(port: number, address: string): Promise<AddressPortState>;
+}
+
+/** 逐地址 connect，全部可用时再逐地址 exclusive bind，避免 localhost/DNS 只检查首地址。 */
+export async function probePortAddresses(
+  port: number,
+  addresses: string[],
+  deps: PortAddressDependencies,
+): Promise<PortState> {
+  const connected = combineAddressStates(await Promise.all(addresses.map(address => deps.connect(port, address))));
+  if (connected.state !== 'free') return connected;
+  return combineAddressStates(await Promise.all(addresses.map(address => deps.bind(port, address))));
+}
+
+export interface CdpReadyWaitDependencies {
+  probe(timeoutMs: number): Promise<boolean>;
+  exitReason(): string | null;
+  sleep(ms: number): Promise<void>;
+  now(): number;
+  assertAuthority?(): void;
+}
+
+/**
+ * 等待固定端口上的 CDP 就绪。子进程早退后仍给并发启动者一段有界复探窗口；窗口结束
+ * 仍未就绪才抛原始退出原因，避免 Chrome 单例竞态被误报为启动失败。
+ */
+export async function waitForCdpReady(
+  deps: CdpReadyWaitDependencies,
+  timeoutMs = 20_000,
+  earlyExitGraceMs = 3_000,
+  pollMs = 400,
+): Promise<void> {
+  const overallDeadline = deps.now() + timeoutMs;
+  let exitDeadline: number | null = null;
+  let rememberedExit: string | null = null;
+
+  while (true) {
+    deps.assertAuthority?.();
+    const now = deps.now();
+    const exit = deps.exitReason();
+    if (exit && exitDeadline === null) {
+      rememberedExit = exit;
+      exitDeadline = Math.min(overallDeadline, now + earlyExitGraceMs);
+    }
+    const activeDeadline = exitDeadline ?? overallDeadline;
+    const remaining = activeDeadline - now;
+    if (remaining <= 0) break;
+
+    let ready = false;
+    try {
+      ready = await deps.probe(Math.min(1_000, remaining));
+    } catch {}
+    deps.assertAuthority?.();
+    if (ready) return;
+
+    const exitAfterProbe = deps.exitReason();
+    if (exitAfterProbe && exitDeadline === null) {
+      rememberedExit = exitAfterProbe;
+      exitDeadline = Math.min(overallDeadline, deps.now() + earlyExitGraceMs);
+    }
+    const nextDeadline = exitDeadline ?? overallDeadline;
+    const pause = Math.min(pollMs, nextDeadline - deps.now());
+    if (pause <= 0) break;
+    await deps.sleep(pause);
+  }
+
+  deps.assertAuthority?.();
+  const exit = deps.exitReason() ?? rememberedExit;
+  if (exit) throw new Error(exit);
+  throw new Error('浏览器启动超时');
+}
+
 export interface FixedPortDependencies {
   /** 每个可能耗时的门禁步骤后校验配置仍授权当前端口；抛错即立即中止。 */
   assertAuthority?(port: number): void;
@@ -71,10 +193,47 @@ export type ListenerReclaimResult =
   | { state: 'busy'; killFailures: string[] }
   | { state: 'unknown'; reason: string; killFailures: string[] };
 
+export type ListenerCleanupPlan = { action: 'kill'; pids: number[] } | { action: 'noProcess' } | { action: 'stillUp' };
+
 type ListenerReclaimDependencies = Pick<
   FixedPortDependencies,
   'killPid' | 'portState' | 'sleep' | 'releaseTimeoutMs' | 'releasePollMs'
 >;
+
+/** 对全部 listener 做 best-effort 回收；单个失败不阻断其余 PID，并保留每个真因。 */
+export function killListenerPids(pids: number[], killPid: (pid: number) => void): string[] {
+  const failures: string[] = [];
+  for (const pid of pids) {
+    try {
+      killPid(pid);
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      failures.push(`${pid}: ${detail}`);
+    }
+  }
+  return failures;
+}
+
+/**
+ * 显式 kill 也必须先证明目标端点确实 busy；否则 IPv6-only wildcard 的保守候选可能被误杀。
+ * 枚举后再核对状态与 PID 快照，端点身份变化时 fail closed。
+ */
+export async function planListenerCleanup(
+  port: number,
+  deps: Pick<FixedPortDependencies, 'portState' | 'listenerPids'>,
+): Promise<ListenerCleanupPlan> {
+  const initialState = await deps.portState(port);
+  if (initialState.state === 'free') return { action: 'noProcess' };
+  if (initialState.state === 'unknown') return { action: 'stillUp' };
+
+  const firstPids = normalizePids(await deps.listenerPids(port));
+  const finalState = await deps.portState(port);
+  if (finalState.state === 'free') return { action: 'noProcess' };
+  if (finalState.state === 'unknown') return { action: 'stillUp' };
+  const finalPids = normalizePids(await deps.listenerPids(port));
+  if (!firstPids.length || !samePids(firstPids, finalPids)) return { action: 'stillUp' };
+  return { action: 'kill', pids: finalPids };
+}
 
 /**
  * 启动后的就绪等待失败时，重新进入不含 spawn 的固定端口状态机。
@@ -102,15 +261,7 @@ export async function reclaimFixedPortListeners(
   pids: number[],
   deps: ListenerReclaimDependencies,
 ): Promise<ListenerReclaimResult> {
-  const killFailures: string[] = [];
-  for (const pid of pids) {
-    try {
-      deps.killPid(pid);
-    } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : String(cause);
-      killFailures.push(`${pid}: ${detail}`);
-    }
-  }
+  const killFailures = killListenerPids(pids, deps.killPid);
 
   const timeoutMs = deps.releaseTimeoutMs ?? 3000;
   const pollMs = deps.releasePollMs ?? 300;
@@ -229,11 +380,15 @@ async function recheckBeforeLaunch(
 
 async function listenerSnapshot(port: number, deps: FixedPortDependencies): Promise<number[]> {
   try {
-    return [...new Set(await deps.listenerPids(port))].filter(pid => Number.isInteger(pid) && pid > 0);
+    return normalizePids(await deps.listenerPids(port));
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     throw new FixedPortError(`枚举配置端口 ${port} 的 TCP 监听进程失败: ${detail}`, { cause });
   }
+}
+
+function normalizePids(pids: number[]): number[] {
+  return [...new Set(pids)].filter(pid => Number.isInteger(pid) && pid > 0);
 }
 
 function samePids(left: number[], right: number[]): boolean {
@@ -248,8 +403,19 @@ function assertAuthority(port: number, deps: FixedPortDependencies): void {
 
 /** host → 数值地址集合；localhost 同时代表两种回环地址。 */
 function hostAddrs(host: string): string[] {
-  const normalized = host.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  const normalized = canonicalAddress(host);
   return normalized === 'localhost' ? ['127.0.0.1', '::1'] : [normalized];
+}
+
+/** 把 IPv6 合法等价写法压缩成一致文本，避免 socket 可连接但 listener 字符串无法归属。 */
+function canonicalAddress(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (!normalized.includes(':')) return normalized;
+  try {
+    return new URL(`http://[${normalized}]/`).hostname.replace(/^\[/, '').replace(/\]$/, '');
+  } catch {
+    return normalized;
+  }
 }
 
 function hostFamilies(host: string): string[] {
@@ -265,7 +431,7 @@ function hostFamilies(host: string): string[] {
 export function addressServes(addr: string, host: string, port: number, family?: string): boolean {
   const separator = addr.lastIndexOf(':');
   if (separator < 0 || addr.slice(separator + 1) !== String(port)) return false;
-  const address = addr.slice(0, separator).replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  const address = canonicalAddress(addr.slice(0, separator));
   if (hostAddrs(host).includes(address)) return true;
   const families = hostFamilies(host);
   if (address === '0.0.0.0') return families.includes('IPv4');
@@ -318,6 +484,16 @@ export function parseLsofListeners(out: string, port: number, host = '127.0.0.1'
   return pids.length ? pids : dualStackFallbackPids;
 }
 
+/** 对 DNS 解析出的全部数值地址取 listener PID 并集。 */
+export function parseLsofListenersForHosts(out: string, port: number, hosts: string[]): number[] {
+  return [...new Set(hosts.flatMap(host => parseLsofListeners(out, port, host)))];
+}
+
+/** 对 DNS 解析出的全部数值地址取 listener PID 并集。 */
+export function parseNetstatListenersForHosts(out: string, port: number, hosts: string[]): number[] {
+  return [...new Set(hosts.flatMap(host => parseNetstatListeners(out, port, host)))];
+}
+
 function addPid(pids: number[], pid: number): void {
   if (!pids.includes(pid)) pids.push(pid);
 }
@@ -330,6 +506,6 @@ function ipv6WildcardMayServeIpv4(addr: string, host: string, port: number, fami
   if (!hostFamilies(host).includes('IPv4')) return false;
   const separator = addr.lastIndexOf(':');
   if (separator < 0 || addr.slice(separator + 1) !== String(port)) return false;
-  const address = addr.slice(0, separator).replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  const address = canonicalAddress(addr.slice(0, separator));
   return address === '::' || (address === '*' && family === 'IPv6');
 }

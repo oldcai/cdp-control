@@ -8,6 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, linkSync, unlinkSync } from 'node:fs';
 import { spawn, spawnSync, execFile } from 'node:child_process';
 import { createServer, connect } from 'node:net';
+import { lookup } from 'node:dns/promises';
 import { promisify } from 'node:util';
 import { getJson, setPort, HOST, PORT, sleep } from './transport';
 import { maybeSpawnDaemon } from './monitor';
@@ -25,16 +26,22 @@ import {
 } from './browser-config';
 import {
   prepareFixedPort,
+  probePortAddresses,
   settleFixedPortLaunch,
   reclaimFixedPortListeners,
   FixedPortError,
   hasCdpWebSocket,
   lsofListenerArgs,
-  parseNetstatListeners,
+  parseNetstatListenersForHosts,
   parseLsofListeners,
+  parseLsofListenersForHosts,
+  planListenerCleanup,
+  resolveSocketHosts,
   type FixedPortDependencies,
+  type AddressPortState,
   type PortState,
   FixedPortLaunchAttempt,
+  waitForCdpReady,
 } from './browser-port';
 
 export interface EnsureResult {
@@ -46,7 +53,7 @@ export interface EnsureResult {
 export interface KillResult {
   ok: boolean;
   port: number;
-  reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken';
+  reason: 'killed' | 'noProcess' | 'killFailed' | 'stillUp' | 'noConfig' | 'broken';
 }
 
 type BrowserChild = ReturnType<typeof spawn>;
@@ -111,22 +118,22 @@ async function waitReady(
   if (launched && (launched.exitCode !== null || launched.signalCode !== null)) {
     onExit(launched.exitCode, launched.signalCode);
   }
-  const t0 = Date.now();
   try {
-    while (Date.now() - t0 < timeoutMs) {
-      assertAuthority?.();
-      if (earlyExit) throw new Error(earlyExit);
-      let ready = false;
-      try {
-        const v: unknown = await getJson('/json/version');
-        ready = hasCdpWebSocket(v);
-      } catch {}
-      assertAuthority?.();
-      if (ready) return;
-      await new Promise(r => setTimeout(r, 400));
-    }
-    if (earlyExit) throw new Error(earlyExit);
-    throw new Error('浏览器启动超时');
+    const dependencies = {
+      probe: async (probeTimeoutMs: number) => {
+        try {
+          const value: unknown = await getJson('/json/version', probeTimeoutMs);
+          return hasCdpWebSocket(value);
+        } catch {
+          return false;
+        }
+      },
+      exitReason: () => earlyExit,
+      sleep,
+      now: Date.now,
+      ...(assertAuthority ? { assertAuthority } : {}),
+    };
+    await waitForCdpReady(dependencies, timeoutMs);
   } finally {
     launched?.off('exit', onExit);
   }
@@ -179,34 +186,44 @@ function resolveExe(exe: string): string | null {
 
 /** connect 先挡 Windows SO_REUSEADDR 的 bind 假空闲，再以严格 bind 确认真的可用。 */
 async function portState(port: number): Promise<PortState> {
-  const connected = await connectState(port);
-  if (connected.state !== 'free') return connected;
-  return bindState(port);
+  let hosts: string[];
+  try {
+    hosts = await resolvedSocketHosts();
+  } catch (cause) {
+    return { state: 'unknown', reason: `解析 ${HOST} 失败: ${cause instanceof Error ? cause.message : String(cause)}` };
+  }
+  return probePortAddresses(port, hosts, {
+    connect: connectAddressState,
+    bind: bindAddressState,
+  });
 }
 
-function connectState(port: number): Promise<PortState> {
+function connectAddressState(port: number, host: string): Promise<AddressPortState> {
   return new Promise(resolve => {
-    const socket = connect({ port, host: HOST });
+    const socket = connect({ port, host });
     let settled = false;
-    const finish = (state: PortState) => {
+    const finish = (state: AddressPortState) => {
       if (settled) return;
       settled = true;
       socket.destroy();
       resolve(state);
     };
-    socket.setTimeout(1000, () => finish({ state: 'unknown', reason: `connect ${HOST}:${port} ETIMEDOUT` }));
-    socket.once('connect', () => finish({ state: 'busy' }));
-    socket.once('error', (error: NodeJS.ErrnoException) =>
-      finish(
-        error.code === 'ECONNREFUSED'
-          ? { state: 'free' }
-          : { state: 'unknown', reason: `connect ${HOST}:${port} ${error.code ?? error.message}` },
-      ),
+    socket.setTimeout(1000, () =>
+      finish({ address: host, state: 'unknown', code: 'ETIMEDOUT', reason: `connect ${host}:${port} ETIMEDOUT` }),
     );
+    socket.once('connect', () => finish({ address: host, state: 'busy' }));
+    socket.once('error', (error: NodeJS.ErrnoException) => {
+      const code = error.code ?? 'UNKNOWN';
+      finish(
+        code === 'ECONNREFUSED'
+          ? { address: host, state: 'free' }
+          : { address: host, state: 'unknown', code, reason: `connect ${host}:${port} ${code}` },
+      );
+    });
   });
 }
 
-function bindState(port: number): Promise<PortState> {
+function bindAddressState(port: number, host: string): Promise<AddressPortState> {
   return new Promise(resolve => {
     const server = createServer();
     let settled = false;
@@ -214,9 +231,9 @@ function bindState(port: number): Promise<PortState> {
       try {
         server.close();
       } catch {}
-      finish({ state: 'unknown', reason: `bind ${HOST}:${port} ETIMEDOUT` });
+      finish({ address: host, state: 'unknown', code: 'ETIMEDOUT', reason: `bind ${host}:${port} ETIMEDOUT` });
     }, 1000);
-    const finish = (state: PortState) => {
+    const finish = (state: AddressPortState) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -224,33 +241,47 @@ function bindState(port: number): Promise<PortState> {
     };
     // 极窄探测窗口内若有客户端连入，立即断开，避免 `server.close(cb)` 等连接结束而永久挂住。
     server.on('connection', socket => socket.destroy());
-    server.once('error', (error: NodeJS.ErrnoException) =>
+    server.once('error', (error: NodeJS.ErrnoException) => {
+      const code = error.code ?? 'UNKNOWN';
       finish(
-        error.code === 'EADDRINUSE'
-          ? { state: 'busy' }
-          : { state: 'unknown', reason: `bind ${HOST}:${port} ${error.code ?? error.message}` },
-      ),
-    );
+        code === 'EADDRINUSE'
+          ? { address: host, state: 'busy' }
+          : { address: host, state: 'unknown', code, reason: `bind ${host}:${port} ${code}` },
+      );
+    });
     server.once('listening', () =>
       server.close(error =>
         finish(
-          error ? { state: 'unknown', reason: `close bind probe ${HOST}:${port} ${error.message}` } : { state: 'free' },
+          error
+            ? {
+                address: host,
+                state: 'unknown',
+                code: 'CLOSE_FAILED',
+                reason: `close bind probe ${host}:${port} ${error.message}`,
+              }
+            : { address: host, state: 'free' },
         ),
       ),
     );
-    server.listen({ port, host: HOST, exclusive: true });
+    server.listen({ port, host, exclusive: true });
   });
+}
+
+function resolvedSocketHosts(): Promise<string[]> {
+  return resolveSocketHosts(HOST, (hostname, options) => lookup(hostname, options));
 }
 
 /** 只枚举真正服务 `HOST:port` 的 TCP LISTEN listener；命令失败保留真因并由门禁拒绝继续。 */
 async function listenerPids(port: number): Promise<number[]> {
+  let resolvedHosts: string[] = [];
   try {
+    resolvedHosts = await resolvedSocketHosts();
     if (process.platform === 'win32') {
       const { stdout } = await execFileAsync('netstat', ['-ano'], { encoding: 'utf8' });
-      return parseNetstatListeners(stdout, port, HOST);
+      return parseNetstatListenersForHosts(stdout, port, resolvedHosts);
     }
     const { stdout } = await execFileAsync('lsof', lsofListenerArgs(port), { encoding: 'utf8' });
-    return parseLsofListeners(stdout, port, HOST);
+    return parseLsofListenersForHosts(stdout, port, resolvedHosts);
   } catch (error) {
     const stdout =
       typeof error === 'object' && error !== null && 'stdout' in error && typeof error.stdout === 'string'
@@ -269,7 +300,9 @@ async function listenerPids(port: number): Promise<number[]> {
       !stderr
     ) {
       // lsof status=1 表示没有匹配项；若同时带 stdout，仍按机器格式解析。
-      return parseLsofListeners(stdout, port, HOST);
+      return resolvedHosts.length
+        ? parseLsofListenersForHosts(stdout, port, resolvedHosts)
+        : parseLsofListeners(stdout, port, HOST);
     }
     const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : 'unknown';
     throw new Error(`枚举配置端口 ${HOST}:${port} 的监听进程失败(${code})${stderr ? `: ${stderr}` : ''}`, {
@@ -571,9 +604,10 @@ export async function killBrowser(): Promise<KillResult> {
     return { ok: false, port: 9222, reason: 'broken' };
   }
   const port = cfg.port;
-  const pids = await listenerPids(port);
-  const release = await reclaimFixedPortListeners(port, pids, { killPid, portState, sleep });
-  return release.state === 'free' && release.killFailures.length === 0
-    ? { ok: true, port, reason: pids.length ? 'killed' : 'noProcess' }
-    : { ok: false, port, reason: 'stillUp' };
+  const plan = await planListenerCleanup(port, { portState, listenerPids });
+  if (plan.action === 'noProcess') return { ok: true, port, reason: 'noProcess' };
+  if (plan.action === 'stillUp') return { ok: false, port, reason: 'stillUp' };
+  const release = await reclaimFixedPortListeners(port, plan.pids, { killPid, portState, sleep });
+  if (release.state !== 'free') return { ok: false, port, reason: 'stillUp' };
+  return release.killFailures.length ? { ok: false, port, reason: 'killFailed' } : { ok: true, port, reason: 'killed' };
 }

@@ -5,18 +5,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  combineAddressStates,
   prepareFixedPort,
+  probePortAddresses,
   settleFixedPortLaunch,
   reclaimFixedPortListeners,
   parseNetstatListeners,
+  parseNetstatListenersForHosts,
   parseLsofListeners,
+  parseLsofListenersForHosts,
+  resolveSocketHosts,
+  socketHost,
   type FixedPortDependencies,
   type ProbeResult,
   type PortState,
   FixedPortLaunchAttempt,
   FixedPortError,
   hasCdpWebSocket,
+  killListenerPids,
   lsofListenerArgs,
+  planListenerCleanup,
+  waitForCdpReady,
 } from '../src/browser-port.ts';
 
 test('hasCdpWebSocket: 只接受非空 ws/wss URL，普通 truthy 值不算健康 CDP', () => {
@@ -52,6 +61,157 @@ test('FixedPortLaunchAttempt: 未 spawn 的本轮清理不碰历史进程，reco
   attempt.cleanup(process => killed.push(process));
   assert.deepEqual(killed, [current]);
   assert.equal(attempt.launched, null);
+});
+
+test('FixedPortLaunchAttempt: 子进程即时退出后释放 kill 归属，但保留精确 waitReady 句柄', () => {
+  const exited = { pid: 403 };
+  const attempt = new FixedPortLaunchAttempt<{ pid: number }>();
+
+  const waitHandle = attempt.record(exited);
+  attempt.release(exited);
+
+  assert.equal(attempt.launched, null);
+  assert.equal(waitHandle, exited);
+});
+
+test('socketHost: bracketed IPv6 仅 URL 保留括号，socket bind/connect 使用裸地址', () => {
+  assert.equal(socketHost('[::1]'), '::1');
+  assert.equal(socketHost('127.0.0.1'), '127.0.0.1');
+});
+
+test('resolveSocketHosts: DNS 主机使用 all:true 保留所有去重地址', async () => {
+  const calls: Array<{ hostname: string; options: { all: true } }> = [];
+  const hosts = await resolveSocketHosts('browser.test', async (hostname, options) => {
+    calls.push({ hostname, options });
+    return [{ address: '192.0.2.44' }, { address: '2001:0db8:0:0:0:0:0:44' }, { address: '192.0.2.44' }];
+  });
+  assert.deepEqual(calls, [{ hostname: 'browser.test', options: { all: true } }]);
+  assert.deepEqual(hosts, ['192.0.2.44', '2001:db8::44']);
+});
+
+test('probePortAddresses: localhost 所有地址都逐一 connect 再逐一 bind', async () => {
+  const calls: string[] = [];
+  const hosts = await resolveSocketHosts('localhost', async () => {
+    throw new Error('localhost 不应调 DNS');
+  });
+  assert.deepEqual(
+    await probePortAddresses(9222, hosts, {
+      connect: async (port, address) => {
+        calls.push(`connect:${address}:${port}`);
+        return { address, state: 'free' };
+      },
+      bind: async (port, address) => {
+        calls.push(`bind:${address}:${port}`);
+        return { address, state: 'free' };
+      },
+    }),
+    { state: 'free' },
+  );
+  assert.deepEqual(calls, ['connect:127.0.0.1:9222', 'connect:::1:9222', 'bind:127.0.0.1:9222', 'bind:::1:9222']);
+});
+
+test('combineAddressStates: localhost 跳过关闭的 IPv6 地址族，保留 IPv4 空闲结论', () => {
+  assert.deepEqual(
+    combineAddressStates([
+      { address: '127.0.0.1', state: 'free' },
+      { address: '::1', state: 'unknown', code: 'EAFNOSUPPORT', reason: 'connect ::1 EAFNOSUPPORT' },
+    ]),
+    { state: 'free' },
+  );
+});
+
+test('waitForCdpReady: 子进程早退后即使端口瞬时空闲也有界复探并发 CDP', async () => {
+  let now = 0;
+  let probes = 0;
+  await waitForCdpReady(
+    {
+      probe: async () => ++probes === 3,
+      exitReason: () => 'fixture child exited(code=0)',
+      sleep: async ms => {
+        now += ms;
+      },
+      now: () => now,
+    },
+    20_000,
+    3_000,
+    1_000,
+  );
+  assert.equal(probes, 3);
+  assert.equal(now, 2_000);
+});
+
+test('waitForCdpReady: 早退宽限结束仍无健康 CDP 时保留真实退出原因', async () => {
+  let now = 0;
+  await assert.rejects(
+    () =>
+      waitForCdpReady(
+        {
+          probe: async () => false,
+          exitReason: () => 'fixture child exited(code=7)',
+          sleep: async ms => {
+            now += ms;
+          },
+          now: () => now,
+        },
+        20_000,
+        3_000,
+        1_000,
+      ),
+    /code=7/,
+  );
+  assert.equal(now, 3_000);
+});
+
+test('killListenerPids: 单个 listener 结束失败仍尝试其余 PID，并聚合真因', () => {
+  const attempted: number[] = [];
+  const failures = killListenerPids([711, 712], pid => {
+    attempted.push(pid);
+    if (pid === 711) throw new Error('EPERM fixture');
+  });
+  assert.deepEqual(attempted, [711, 712]);
+  assert.deepEqual(failures, ['711: EPERM fixture']);
+});
+
+test('planListenerCleanup: 端点空闲时不枚举、更不误杀另一地址族 wildcard listener', async () => {
+  const calls: string[] = [];
+  const plan = await planListenerCleanup(9222, {
+    portState: async () => {
+      calls.push('state');
+      return { state: 'free' };
+    },
+    listenerPids: async () => {
+      calls.push('listeners');
+      return [888];
+    },
+  });
+  assert.deepEqual(plan, { action: 'noProcess' });
+  assert.deepEqual(calls, ['state']);
+});
+
+test('planListenerCleanup: 只有端点持续 busy 且 PID 快照稳定才允许 kill', async () => {
+  const states: PortState[] = [{ state: 'busy' }, { state: 'busy' }];
+  const listeners = [
+    [901, 902, 901],
+    [902, 901],
+  ];
+  assert.deepEqual(
+    await planListenerCleanup(9222, {
+      portState: async () => states.shift() ?? { state: 'busy' },
+      listenerPids: async () => listeners.shift() ?? [],
+    }),
+    { action: 'kill', pids: [902, 901] },
+  );
+});
+
+test('planListenerCleanup: 端点 busy 但 PID 快照换代时 fail closed', async () => {
+  const listeners = [[911], [912]];
+  assert.deepEqual(
+    await planListenerCleanup(9222, {
+      portState: async () => ({ state: 'busy' }),
+      listenerPids: async () => listeners.shift() ?? [],
+    }),
+    { action: 'stillUp' },
+  );
 });
 
 function dependencies(
@@ -571,4 +731,23 @@ test('parseLsofListeners: IPv6 wildcard 双栈 listener 也能归属 IPv4 回环
 test('parseLsofListeners: 新 fd 清空地址族，无法归属的 wildcard 宁可不杀', () => {
   const out = ['p555', 'f7', 'tIPv6', 'n[::1]:9222', 'f8', 'n*:9222'].join('\n');
   assert.deepEqual(parseLsofListeners(out, 9222, '127.0.0.1'), []);
+});
+
+test('parseLsofListenersForHosts: DNS 主机解析出的所有数值地址可归属 listener', () => {
+  const out = ['p666', 'f7', 'tIPv4', 'n192.0.2.44:9222', 'p667', 'f8', 'tIPv6', 'n[2001:db8::44]:9222'].join('\n');
+  assert.deepEqual(parseLsofListenersForHosts(out, 9222, ['192.0.2.44', '2001:db8::44']), [666, 667]);
+});
+
+test('parseNetstatListenersForHosts: DNS 多地址 PID 取并集并去重', () => {
+  const out = [
+    'TCP 192.0.2.44:9222 0.0.0.0:0 LISTENING 668',
+    'TCP [2001:db8::44]:9222 [::]:0 LISTENING 669',
+    'TCP 192.0.2.44:9222 0.0.0.0:0 LISTENING 668',
+  ].join('\r\n');
+  assert.deepEqual(parseNetstatListenersForHosts(out, 9222, ['192.0.2.44', '2001:db8::44']), [668, 669]);
+});
+
+test('parseLsofListeners: IPv6 合法非压缩写法与 lsof 压缩地址按同一端点匹配', () => {
+  const out = ['p777', 'f7', 'tIPv6', 'n[::1]:9222'].join('\n');
+  assert.deepEqual(parseLsofListeners(out, 9222, '[0:0:0:0:0:0:0:1]'), [777]);
 });

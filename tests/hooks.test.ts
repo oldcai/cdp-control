@@ -17,6 +17,18 @@ function assertSuccess(result: ReturnType<typeof run>, label: string): void {
   assert.equal(result.status, 0, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
 }
 
+const gitLocalEnvironmentVariables = (() => {
+  const result = run('git', ['rev-parse', '--local-env-vars'], repoRoot);
+  assertSuccess(result, '读取 Git local environment variables');
+  return result.stdout.trim().split(/\s+/).filter(Boolean);
+})();
+
+function withoutGitLocalEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sanitized = { ...environment };
+  for (const name of gitLocalEnvironmentVariables) delete sanitized[name];
+  return sanitized;
+}
+
 function runNpm(args: string[], cwd: string, environment: NodeJS.ProcessEnv) {
   const npmExecPath = environment.npm_execpath;
   assert.ok(npmExecPath, '测试必须由 npm test 启动，以便跨平台使用 npm_execpath');
@@ -35,15 +47,25 @@ test('tracked pre-commit 使用 POSIX sh + LF，且快速档严格按 typecheck 
   assert.match(mode.stdout, /^100755 /, 'pre-commit 必须以 100755 进入 Git index');
 });
 
+test('foreign Git fixture 不继承当前仓库的 local environment', () => {
+  const contaminated = { ...process.env, FOREIGN_FIXTURE_SENTINEL: 'preserved' };
+  for (const name of gitLocalEnvironmentVariables) contaminated[name] = `outer-${name}`;
+
+  const sanitized = withoutGitLocalEnvironment(contaminated);
+  assert.equal(sanitized.FOREIGN_FIXTURE_SENTINEL, 'preserved');
+  for (const name of gitLocalEnvironmentVariables) assert.equal(sanitized[name], undefined, `${name} must be removed`);
+});
+
 test('安装器只写 local core.hooksPath，并拒绝 CRLF hook', () => {
   mkdirSync(fixtureRoot, { recursive: true });
   const fixture = mkdtempSync(join(fixtureRoot, 'hooks-install-'));
+  const environment = withoutGitLocalEnvironment(process.env);
   try {
-    assertSuccess(run('git', ['init', '--initial-branch=main'], fixture), 'git init');
+    assertSuccess(run('git', ['init', '--initial-branch=main'], fixture, environment), 'git init');
     mkdirSync(join(fixture, '.githooks'));
     writeFileSync(join(fixture, '.githooks', 'pre-commit'), '#!/bin/sh\nset -eu\nnpm run typecheck\nnpm test\n');
-    installHooks({ rootDir: fixture });
-    const configured = run('git', ['config', '--local', '--get', 'core.hooksPath'], fixture);
+    installHooks({ rootDir: fixture, environment });
+    const configured = run('git', ['config', '--local', '--get', 'core.hooksPath'], fixture, environment);
     assertSuccess(configured, '读取 local core.hooksPath');
     assert.equal(configured.stdout.trim(), '.githooks');
 
@@ -66,7 +88,7 @@ test('干净 clone 一步安装后普通 commit 被 hook 拦截，--no-verify �
   mkdirSync(isolatedHome);
 
   const environment = {
-    ...process.env,
+    ...withoutGitLocalEnvironment(process.env),
     GIT_CONFIG_NOSYSTEM: '1',
     HOME: isolatedHome,
     USERPROFILE: isolatedHome,
