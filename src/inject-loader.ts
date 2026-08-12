@@ -38,17 +38,31 @@ export function inject(name: string, args?: unknown): string {
  * scrollToLoad 启用滚动加载(默认 ±1 屏回弹);scrollPages 循环滚 N 屏(边滚边检测增长);
  * scrollTo 先滚到该 selector 元素(B站评论区容器);budget 在 ref 分配后限制总渲染字符数。 */
 export function viewExpr(
-  selector?: string, visibleOnly?: boolean, ref?: number, ancestor?: number,
-  scrollToLoad?: boolean, folds?: unknown, scrollPages?: number, scrollTo?: string, scrollWait?: number,
-  ignoreLinks?: string[], maxLen?: number, budget?: number, focus?: number,
+  selector?: string,
+  visibleOnly?: boolean,
+  ref?: number,
+  ancestor?: number,
+  scrollToLoad?: boolean,
+  folds?: unknown,
+  scrollPages?: number,
+  scrollTo?: string,
+  scrollWait?: number,
+  ignoreLinks?: string[],
+  maxLen?: number,
+  budget?: number,
+  focus?: number,
 ): string {
   return inject('view', {
-    selector, visibleOnly: visibleOnly || undefined, ref, ancestor,
+    selector,
+    visibleOnly: visibleOnly || undefined,
+    ref,
+    ancestor,
     scrollToLoad: scrollToLoad || undefined,
     scrollPages: scrollPages != null ? scrollPages : undefined,
     scrollTo: scrollTo || undefined,
     scrollWait: scrollWait != null ? scrollWait : undefined,
-    folds, ignoreLinks,
+    folds,
+    ignoreLinks,
     maxLen: maxLen != null ? maxLen : undefined,
     budget: budget != null ? budget : undefined,
     focus: focus != null ? focus : undefined,
@@ -82,7 +96,13 @@ export function readExpr(levelSet: string[] | null, since: number): string {
 }
 
 /** fold:会话级临时折叠(ref/ancestor/note;list 列出临时;clear 清空临时)。持久规则由 Node 侧 folds.ts 处理。 */
-export function foldExpr(args: { ref?: number; ancestor?: number; note?: string; list?: boolean; clear?: boolean }): string {
+export function foldExpr(args: {
+  ref?: number;
+  ancestor?: number;
+  note?: string;
+  list?: boolean;
+  clear?: boolean;
+}): string {
   return inject('fold', args);
 }
 

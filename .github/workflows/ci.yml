@@ -1,0 +1,113 @@
+name: CI
+
+"on":
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint / Node 22.6.0 / Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.6.0'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run static checks
+        run: npm run lint
+      - name: Check CLI documentation drift
+        run: npm run docs:check
+
+  build-and-test:
+    name: Node ${{ matrix.node-version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        node-version:
+          - '22.6.0'
+          - '24.x'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and type-check
+        run: npm run build
+      - name: Run tests
+        run: npm test
+
+  package-smoke:
+    name: Package smoke / Node 22.6.0 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    env:
+      # Defense in depth: package smoke must never cold-start a browser.
+      CDP_NO_AUTOSTART: '1'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.6.0'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Pack, install, and run packaged CLI
+        run: npm run test:pack
+      - name: Rehearse publish without publishing
+        run: npm run publish:dry-run
+
+  integration:
+    name: Integration / Node 22.6.0 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    env:
+      # Hosted images on all three platforms include a browser covered by browser-discover.ts.
+      # Make a discovery miss fail instead of silently turning this required job green via SKIP.
+      CDP_INTEGRATION_REQUIRE_BROWSER: '1'
+      # Print every scenario command's exit status and both streams for post-failure diagnosis.
+      CDP_INTEGRATION_DIAGNOSTICS: '1'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.6.0'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run browser integration tests
+        run: npm run test:integration

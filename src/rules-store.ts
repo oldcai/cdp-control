@@ -1,21 +1,21 @@
 /**
  * rules-store.ts — 规则持久化的统一目录与 seed-once(Node 侧)。
  *
- * 规则统一住 `~/.cdp-control/rules`(数据 home,spec「数据归用户目录」):用户本机它是指向
+ * 规则统一住 `<CDP_HOME>/rules`(默认 ~/.cdp-control/rules;数据 home):用户本机它是指向
  * 根目录 `rules/` 的符号链接(用户规则=根本规则,运行时读写直接落 git 工作树的 rules),干净环境
  * 是真实目录,seed-once 首跑缺文件时从包内 `rules/` 拷默认。recipe 作者代码直接读 git 权威、
  * 不做镜像(曾 seed 到 `rules/recipes/` 双份必漂移——见 2026-08 实测 _lib.js 漂移 22 字节)。
  *
- * 默认定位:`rulesDir()` 用 homedir(不依赖 __dirname,故 src/测试与 dist/编译一致);
+ * 默认定位:`rulesDir()` 用 cdpHome(不依赖 __dirname,故 src/测试与 dist/编译一致);
  * `pkgRulesDir()` 用 __dirname 定位包内 `rules/`(源码=根目录,安装=包内,publish 随包,seed 源稳定)。
  */
 import { existsSync, copyFileSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { cdpHome, type CdpEnvironment } from './paths.ts';
 
-/** 实时规则目录(默认 ~/.cdp-control/rules,可用 CDP_RULES_DIR 覆盖用于测试)。 */
-export function rulesDir(): string {
-  return process.env.CDP_RULES_DIR || join(homedir(), '.cdp-control', 'rules');
+/** 实时规则目录(默认 <CDP_HOME>/rules;CDP_RULES_DIR 优先覆盖)。 */
+export function rulesDir(environment: CdpEnvironment = process.env): string {
+  return environment.CDP_RULES_DIR || join(cdpHome(environment), 'rules');
 }
 
 /** 包内默认源(根目录 rules/。源码=仓库根,安装=node_modules/cdp-control/。测试用 CDP_RULES_DEFAULT_DIR 覆盖)。 */

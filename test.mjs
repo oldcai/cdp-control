@@ -4,8 +4,15 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const dir = join(import.meta.dirname, 'tests');
-const files = readdirSync(dir).filter(f => f.endsWith('.test.ts')).map(f => join(dir, f));
-if (!files.length) { console.error('没有测试文件'); process.exit(1); }
+const files = readdirSync(dir)
+  .filter(f => f.endsWith('.test.ts'))
+  .map(f => join(dir, f));
+if (!files.length) {
+  console.error('没有测试文件');
+  process.exit(1);
+}
 try {
   execSync(`node --test --experimental-strip-types ${files.map(f => `"${f}"`).join(' ')}`, { stdio: 'inherit' });
-} catch (e) { process.exit(1); }
+} catch {
+  process.exit(1);
+}

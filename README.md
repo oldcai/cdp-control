@@ -1,5 +1,7 @@
 # cdp-control
 
+[![CI](https://github.com/oldcai/cdp-control/actions/workflows/ci.yml/badge.svg)](https://github.com/oldcai/cdp-control/actions/workflows/ci.yml)
+
 通过 Chrome DevTools Protocol (CDP) 控制本地浏览器的 CLI —— 面向 AI agent 读网页。
 
 > ⚠️ **未完工**：此项目仍在开发中，接口与行为可能随时变动，暂不建议依赖。

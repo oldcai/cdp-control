@@ -4,7 +4,16 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { inlineLen, inlineable, leafText, firstTxt, isTrivialLeaf, cut, isPureCount, isSemanticDataValue } from '../src/inject/lib/view-utils.ts';
+import {
+  inlineLen,
+  inlineable,
+  leafText,
+  firstTxt,
+  isTrivialLeaf,
+  cut,
+  isPureCount,
+  isSemanticDataValue,
+} from '../src/inject/lib/view-utils.ts';
 
 // —— inlineLen ——
 test('inlineLen: 自身文本长度', () => {
@@ -22,7 +31,12 @@ test('inlineLen: title 自含项 = leafValue + 后代首个文本', () => {
 
 test('inlineLen: 递归求和并提前停(超 24 不继续累加)', () => {
   // 第一个子就 >24,提前停
-  const n = { kids: [{ text: 'x'.repeat(30), kids: [] }, { text: 'y', kids: [] }] };
+  const n = {
+    kids: [
+      { text: 'x'.repeat(30), kids: [] },
+      { text: 'y', kids: [] },
+    ],
+  };
   assert.ok(inlineLen(n) > 24);
 });
 
@@ -45,7 +59,15 @@ test('leafText: 自身文本优先', () => {
 });
 
 test('leafText: 自身无文本取首个有文本后代', () => {
-  assert.equal(leafText({ kids: [{ text: '', kids: [] }, { text: 'found', kids: [] }] }), 'found');
+  assert.equal(
+    leafText({
+      kids: [
+        { text: '', kids: [] },
+        { text: 'found', kids: [] },
+      ],
+    }),
+    'found',
+  );
 });
 
 test('leafText: 全空返回空串', () => {
@@ -54,12 +76,23 @@ test('leafText: 全空返回空串', () => {
 
 // —— firstTxt ——
 test('firstTxt: 取后代数组里首个有文本项', () => {
-  const arr = [{ text: '', kids: [] }, { text: 'A', kids: [] }, { text: 'B', kids: [] }];
+  const arr = [
+    { text: '', kids: [] },
+    { text: 'A', kids: [] },
+    { text: 'B', kids: [] },
+  ];
   assert.equal(firstTxt(arr), 'A');
 });
 
 test('firstTxt: 递归深入无文本项的 kids', () => {
-  const arr = [{ kids: [{ text: '', kids: [] }, { text: 'deep', kids: [] }] }];
+  const arr = [
+    {
+      kids: [
+        { text: '', kids: [] },
+        { text: 'deep', kids: [] },
+      ],
+    },
+  ];
   assert.equal(firstTxt(arr), 'deep');
 });
 

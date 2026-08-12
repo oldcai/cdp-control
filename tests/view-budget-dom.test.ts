@@ -12,7 +12,9 @@ import { renderBudgetedView } from '../src/inject/lib/view-budget.ts';
 class FakeText {
   readonly nodeType = 3;
   readonly nodeValue: string;
-  constructor(nodeValue: string) { this.nodeValue = nodeValue; }
+  constructor(nodeValue: string) {
+    this.nodeValue = nodeValue;
+  }
 }
 
 class FakeElement {
@@ -46,10 +48,18 @@ class FakeElement {
     return this;
   }
 
-  getAttribute(name: string): string | null { return this.attrs.get(name) ?? null; }
-  hasAttribute(name: string): boolean { return this.attrs.has(name); }
-  matches(selector: string): boolean { return this.attrs.get('data-selector') === selector; }
-  getBoundingClientRect() { return { width: 100, height: 20, top: 0, bottom: 20, left: 0, right: 100 }; }
+  getAttribute(name: string): string | null {
+    return this.attrs.get(name) ?? null;
+  }
+  hasAttribute(name: string): boolean {
+    return this.attrs.has(name);
+  }
+  matches(selector: string): boolean {
+    return this.attrs.get('data-selector') === selector;
+  }
+  getBoundingClientRect() {
+    return { width: 100, height: 20, top: 0, bottom: 20, left: 0, right: 100 };
+  }
 }
 
 interface TestGlobals {

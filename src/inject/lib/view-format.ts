@@ -8,23 +8,30 @@ import { inlineable, leafText, firstTxt, isTrivialLeaf, cut } from './view-utils
 
 /** 内部节点:simplify(DOM 采集)的产物,也是 formatView 的输入。字段与旧 view.ts 的 interface Node 一一对应。 */
 export interface ViewNode {
-  tag: string; isContent: boolean; text: string; inter: boolean; imgAlt: string;
-  kids: ViewNode[]; size: number; hasText: boolean; leafValue?: string;
-  agg?: boolean;   // 显示文本来自 innerText/grabText 兜底(聚合文本)而非直接文本节点
+  tag: string;
+  isContent: boolean;
+  text: string;
+  inter: boolean;
+  imgAlt: string;
+  kids: ViewNode[];
+  size: number;
+  hasText: boolean;
+  leafValue?: string;
+  agg?: boolean; // 显示文本来自 innerText/grabText 兜底(聚合文本)而非直接文本节点
   shadow?: boolean; // 宿主带 shadowRoot:其下子节点来自 shadow DOM,CSS 选择器不能穿透,须用 ref 定位
-  ref?: number;    // view 登记的全局引用序号(见 __cdpRefs),输出标注 [ref=i],agent 用它直接操作真实元素
+  ref?: number; // view 登记的全局引用序号(见 __cdpRefs),输出标注 [ref=i],agent 用它直接操作真实元素
   budgetRef?: number; // 该节点在 __cdpRefs 的稳定句柄(含默认不打印 ref 的隐藏包装节点),仅供预算折叠留占位
   budgetFoldable?: boolean; // false=该 ref 只指向合并文本中的末段元素,不能代表/展开节点展示的完整内容
   hidden?: boolean; // 纯容器 div(叶子路径上的祖父):ref 已登记进 __cdpRefs 但 view 默认不显示,info 反查可显示
-  fold?: string;   // 命中折叠规则:输出一行 ▸ [ref=i] <备注>,不展开子树(但保留 ref,view <ref> 可展开)
+  fold?: string; // 命中折叠规则:输出一行 ▸ [ref=i] <备注>,不展开子树(但保留 ref,view <ref> 可展开)
   foldSize?: number; // 被折叠掉的子树元素数,折叠行 ▸ 备注 (N) 显示规模(view-core 折叠点算)
   hasInter?: boolean; // 自身或任一后代可交互——含交互子代的包装节点不可内联折叠,否则交互叶的 ref 被整颗吞掉
   inView?: boolean; // visible-only:自身是否落在当前视口内且可见(仅 Element 计算;包装节点不查)
-  view?: boolean;   // viewport 标记:带 ref 的节点是否在当前视区内(便宜判定,rect+宽高,不查 computed style)。true → 输出 [ref=i·屏]
+  view?: boolean; // viewport 标记:带 ref 的节点是否在当前视区内(便宜判定,rect+宽高,不查 computed style)。true → 输出 [ref=i·屏]
   state?: string[]; // 语义/原生状态(pressed/checked/expanded/selected/disabled/open;ARIA mixed 记为 name=mixed)
   inputInfo?: { type?: string; value?: string; placeholder?: string }; // INPUT/TEXTAREA/SELECT:view 显示 type/value/placeholder,让 agent 看到表单内容
-  el?: Element;       // 建树时暂存真实 DOM 元素(两遍先序的遍二登记 ref 用);格式化忽略
-  wantRef?: boolean;  // 遍一标记:内容/交互/折叠/shadow 宿主,遍二分配并打印 [ref=N]
+  el?: Element; // 建树时暂存真实 DOM 元素(两遍先序的遍二登记 ref 用);格式化忽略
+  wantRef?: boolean; // 遍一标记:内容/交互/折叠/shadow 宿主,遍二分配并打印 [ref=N]
   wantHidden?: boolean; // 遍一标记:纯包装含内容,遍二分配但不打印(隐藏容器,info 反查可用)
   mergeable?: boolean; // 纯文本段或命中 ignore-links 的 <a>:可与相邻文本段合并(取最后段的 ref),见 view-core
 }
@@ -92,7 +99,10 @@ const refTag = (n: ViewNode) => {
 export function markText(n: ViewNode): boolean {
   let h = !!(n.text || n.imgAlt || n.state?.length) || n.fold != null;
   let hi = !!n.inter;
-  for (const k of n.kids) { if (markText(k)) h = true; if (k.hasInter) hi = true; }
+  for (const k of n.kids) {
+    if (markText(k)) h = true;
+    if (k.hasInter) hi = true;
+  }
   n.hasText = h;
   n.hasInter = hi;
   return h;
@@ -153,8 +163,15 @@ function formatViewInternal(
       }
       // 折叠节点:输出一行带备注的折叠标识 + ref + 折叠规模,不展开子树(子树里的嵌套折叠在 view <ref> 展开时才显现)。
       if (n.fold != null) {
-        out.push('  '.repeat(depth) + '▸' + refTag(n) + ' ' + n.fold + (n.shadow ? '[shadow]' : '')
-          + (n.foldSize ? ' (' + n.foldSize + ')' : ''));
+        out.push(
+          '  '.repeat(depth) +
+            '▸' +
+            refTag(n) +
+            ' ' +
+            n.fold +
+            (n.shadow ? '[shadow]' : '') +
+            (n.foldSize ? ' (' + n.foldSize + ')' : ''),
+        );
         return;
       }
       // 整页 view 对带 shadowRoot 的 host(depth>0 子节点,已登记 ref)只输出占位行,不展开其 shadow 子树
@@ -205,13 +222,25 @@ function formatViewInternal(
       const newPath = path.concat([tagLabel(n) + pathRef]);
       // productive = 有文本且非琐碎叶,或可交互,或折叠节点,或带 ref 的 shadow host
       // (后两者 hasText/inter 都 false,需显式纳入才能 walk 到占位/▸ 输出;空壳 shadow host 不纳入就会从整页 view 消失)
-      const productive = kids.filter(k => containsBudgetFold(k) || (k.hasText && !isTrivialLeaf(k))
-        || k.inter || !!k.state?.length || k.fold != null || (k.shadow && k.ref != null));
-      if (productive.length === 1) { walk(productive[0], depth, newPath); return; }
+      const productive = kids.filter(
+        k =>
+          containsBudgetFold(k) ||
+          (k.hasText && !isTrivialLeaf(k)) ||
+          k.inter ||
+          !!k.state?.length ||
+          k.fold != null ||
+          (k.shadow && k.ref != null),
+      );
+      if (productive.length === 1) {
+        walk(productive[0], depth, newPath);
+        return;
+      }
       if (productive.length >= 2) {
         // 交互/带 ref/含交互子代的节点不内联折叠:必须各自成行,否则 [ref=i] 标注被吞、agent 拿不到可操作句柄。
         // 含交互子代(hasInter)也不能折叠——纯包装 DIV 内含按钮时,内联只取第一个文本,把其它交互叶的 ref 整颗吞掉(如知乎评论动作行)。
-        if (productive.every(k => !containsBudgetFold(k) && inlineable(k) && !k.inter && !k.hasInter && k.ref == null)) {
+        if (
+          productive.every(k => !containsBudgetFold(k) && inlineable(k) && !k.inter && !k.hasInter && k.ref == null)
+        ) {
           const items = productive.map(inlineLabel).join(' ');
           out.push('  '.repeat(depth) + (newPath.length ? newPath.join(' > ') + ' ' : '') + items);
           return;

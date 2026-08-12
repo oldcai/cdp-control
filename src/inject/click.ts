@@ -22,7 +22,10 @@ function hitChainAt(x: number, y: number): Element[] {
 
 function compactElement(el: Element | undefined): string {
   if (!el) return '<未知元素>';
-  const classes = Array.from(el.classList).slice(0, 3).map(name => '.' + name.slice(0, 32)).join('');
+  const classes = Array.from(el.classList)
+    .slice(0, 3)
+    .map(name => '.' + name.slice(0, 32))
+    .join('');
   return `<${el.tagName.toLowerCase()}${classes}>`;
 }
 

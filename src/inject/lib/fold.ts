@@ -4,12 +4,19 @@
  * buildView 折叠时与持久规则(Node 侧传入的 folds)合并按 selector 匹配。
  * 生命周期:与 __cdpRefs 一致,页面刷新(新 document)清空。
  */
-export interface FoldEntry { selector: string; note: string }
+export interface FoldEntry {
+  selector: string;
+  note: string;
+}
+
+type FoldGlobals = typeof globalThis & { __cdpFolds?: FoldEntry[] };
+
+const foldGlobals = globalThis as FoldGlobals;
 
 /** 临时折叠数组(不存在则初始化)。 */
 export function tmpFolds(): FoldEntry[] {
-  if (!(globalThis as any).__cdpFolds) (globalThis as any).__cdpFolds = [];
-  return (globalThis as any).__cdpFolds;
+  if (!foldGlobals.__cdpFolds) foldGlobals.__cdpFolds = [];
+  return foldGlobals.__cdpFolds;
 }
 
 /** 加一条临时折叠。note 空时用 selector 兜底。 */
@@ -19,7 +26,7 @@ export function addTmpFold(selector: string, note: string): void {
 
 /** 清空临时折叠。 */
 export function clearTmpFolds(): void {
-  (globalThis as any).__cdpFolds = [];
+  foldGlobals.__cdpFolds = [];
 }
 
 /** 列出临时折叠副本。 */

@@ -7,16 +7,33 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
-import { getJson, setPort, HOST, PORT } from './transport';
+import { getJson, setPort, HOST, PORT, type BrowserVersion } from './transport';
 import { maybeSpawnDaemon } from './monitor';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
-import { browserConfigPath, parseBrowserConfig, defaultArgs, DEFAULT_PORT, DEFAULT_USER_DATA, type BrowserConfig } from './browser-config';
+import {
+  browserConfigPath,
+  parseBrowserConfig,
+  defaultArgs,
+  DEFAULT_PORT,
+  DEFAULT_USER_DATA,
+  type BrowserConfig,
+} from './browser-config';
 import { portFreeOn, findFreePort, endpointAlive, parseNetstatListeners, parseLsofListeners } from './port';
+import { cdpNoAutostart } from './paths.ts';
 
-export interface EnsureResult { ready: boolean; started: boolean; browser?: string; userData?: string; }
+export interface EnsureResult {
+  ready: boolean;
+  started: boolean;
+  browser?: string;
+  userData?: string;
+}
 /** coldStart 结果:自己拉起来的浏览器,或"并发进程已拉起、直接复用"。 */
 type ColdResult = { kind: BrowserKind; exe: string; userData: string; port: number } | { reused: string };
-export interface KillResult { ok: boolean; port: number; reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken'; }
+export interface KillResult {
+  ok: boolean;
+  port: number;
+  reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken';
+}
 
 let child: ReturnType<typeof spawn> | null = null;
 
@@ -32,14 +49,20 @@ function killLast(): void {
 
 function launch(exe: string, args: string[], port: number, userData: string): void {
   killLast();
-  child = spawn(exe, [...args, `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`], { detached: true, stdio: 'ignore' });
+  child = spawn(exe, [...args, `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`], {
+    detached: true,
+    stdio: 'ignore',
+  });
   child.unref();
 }
 
 async function waitReady(timeoutMs = 20000): Promise<void> {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    try { const v = await getJson('/json/version'); if (v?.webSocketDebuggerUrl) return; } catch {}
+    try {
+      const v = await getJson<BrowserVersion>('/json/version');
+      if (v?.webSocketDebuggerUrl) return;
+    } catch {}
     await new Promise(r => setTimeout(r, 400));
   }
   throw new Error('浏览器启动超时');
@@ -48,10 +71,12 @@ async function waitReady(timeoutMs = 20000): Promise<void> {
 /** ready 探活(一次 GET,顺带拿浏览器名)。`timeoutMs` 可收紧:复验占用者身份时不想为"只接受不应答"的占用者等满 5s。 */
 async function probeReady(timeoutMs?: number): Promise<{ ready: boolean; browser?: string }> {
   try {
-    const v = await getJson('/json/version', timeoutMs);
+    const v = await getJson<BrowserVersion>('/json/version', timeoutMs);
     if (!v?.webSocketDebuggerUrl) return { ready: false };
     return { ready: true, browser: describeBrowser(v.Browser || '') };
-  } catch { return { ready: false }; }
+  } catch {
+    return { ready: false };
+  }
 }
 
 /** 反复探活到就绪或超时(用于"端口有人但可能是正在启动的浏览器")。 */
@@ -119,7 +144,10 @@ async function pickPort(want: number, busyProbed: number | null): Promise<{ port
   if (await portFreeOn(want, HOST)) return { port: want };
   {
     const p = busyProbed === want ? await probeReady(1000) : await probeReadySoon();
-    if (p.ready) { console.error(`端口 ${want} 上的浏览器已由并发进程拉起,直接复用`); return { reused: p.browser || '未知浏览器' }; }
+    if (p.ready) {
+      console.error(`端口 ${want} 上的浏览器已由并发进程拉起,直接复用`);
+      return { reused: p.browser || '未知浏览器' };
+    }
   }
   const port = await findFreePort(want + 1, 50, HOST);
   setPort(port);
@@ -142,8 +170,13 @@ async function launchReady(exe: string, args: string[], port: number, userData: 
       console.error(`⚠ 端口 ${port} 上浏览器没能就绪,改用 ${target} 重试`);
     } else target = p;
     setPort(target);
-    try { launch(exe, args, target, userData); await waitReady(); return target; }
-    catch { killLast(); }
+    try {
+      launch(exe, args, target, userData);
+      await waitReady();
+      return target;
+    } catch {
+      killLast();
+    }
   }
   return null;
 }
@@ -154,8 +187,10 @@ async function launchReady(exe: string, args: string[], port: number, userData: 
  * 提示里直接给出可执行的下一步,别让人以为浏览器没装。
  */
 function busyProfileHint(what: string, userData: string, cfgPath: string): string {
-  return `${what}。\n最常见原因:已有浏览器实例占着同一 user-data(${userData}),单例机制让新进程直接退出。`
-    + `\n处理:先 cdp-control kill(或手动关掉那个浏览器窗口)再重试;或编辑 ${cfgPath} 换 userData/port。`;
+  return (
+    `${what}。\n最常见原因:已有浏览器实例占着同一 user-data(${userData}),单例机制让新进程直接退出。` +
+    `\n处理:先 cdp-control kill(或手动关掉那个浏览器窗口)再重试;或编辑 ${cfgPath} 换 userData/port。`
+  );
 }
 
 /**
@@ -169,8 +204,12 @@ async function coldStart(busyProbed: number | null): Promise<ColdResult> {
 
   if (existsSync(p)) {
     let cfg: BrowserConfig | null;
-    try { cfg = loadConfigOrNull(); }
-    catch (e: any) { throw new Error(`${(e as Error).message}\n浏览器启动配置损坏,不做兜底,请编辑 ${p}`); }
+    try {
+      cfg = loadConfigOrNull();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${message}\n浏览器启动配置损坏,不做兜底,请编辑 ${p}`);
+    }
     if (!cfg) throw new Error(`浏览器启动配置损坏,不做兜底,请编辑 ${p}`);
     if (!existsSync(cfg.exe)) throw new Error(`browser.json 的 exe 不存在: ${cfg.exe}\n请编辑 ${p}`);
     mkdirSync(cfg.userData, { recursive: true });
@@ -178,9 +217,13 @@ async function coldStart(busyProbed: number | null): Promise<ColdResult> {
     if ('reused' in pick) return pick;
     const want = pick.port;
     const port = await launchReady(cfg.exe, cfg.args, want, cfg.userData);
-    if (port == null) throw new Error(busyProfileHint(`浏览器启动超时(${cfg.exe} 在端口 ${want} 未就绪)`, cfg.userData, p));
+    if (port == null)
+      throw new Error(busyProfileHint(`浏览器启动超时(${cfg.exe} 在端口 ${want} 未就绪)`, cfg.userData, p));
     // 端口漂了(被占/没就绪换口)就回写配置,下次直接对
-    if (port !== cfg.port) { writeConfigAtomic(p, { ...cfg, port }); console.error(`已把端口 ${port} 写回 ${p}`); }
+    if (port !== cfg.port) {
+      writeConfigAtomic(p, { ...cfg, port });
+      console.error(`已把端口 ${port} 写回 ${p}`);
+    }
     maybeSpawnDaemon();
     return { kind: cfg.kind, exe: cfg.exe, userData: cfg.userData, port };
   }
@@ -204,9 +247,11 @@ async function coldStart(busyProbed: number | null): Promise<ColdResult> {
     return { kind: c.kind, exe, userData, port };
   }
   // 区分两种失败:一个候选都不存在 vs 存在但都没在端口上就绪(后者给出试过谁,别让人以为没装浏览器)
-  throw new Error(tried.length
-    ? busyProfileHint(`找到浏览器但都没能在端口 ${want} 就绪(试过: ${tried.join(', ')})`, userData, p)
-    : `未找到可用浏览器。可手动创建 ${p} 指定 exe/args`);
+  throw new Error(
+    tried.length
+      ? busyProfileHint(`找到浏览器但都没能在端口 ${want} 就绪(试过: ${tried.join(', ')})`, userData, p)
+      : `未找到可用浏览器。可手动创建 ${p} 指定 exe/args`,
+  );
 }
 
 /** 确保有 CDP 浏览器在跑:就绪零开销(1 GET);未就绪自动拉起。 */
@@ -222,8 +267,16 @@ export async function ensureBrowser(): Promise<EnsureResult> {
   // 并发进程回写成别的,布尔值会张冠李戴地免掉新端口的探测。
   const probed = Number(PORT);
   let busyProbed: number | null = null;
-  if (!probe.ready && !(await portFreeOn(probed, HOST))) { busyProbed = probed; probe = await probeReadySoon(); }
+  if (!probe.ready && !(await portFreeOn(probed, HOST))) {
+    busyProbed = probed;
+    probe = await probeReadySoon();
+  }
   if (probe.ready) return { ready: true, started: false, browser: probe.browser, userData: cfg?.userData };
+  // 集成 harness/连接专用模式必须保持进程所有权：端点掉线就报错，不在短命 CLI
+  // 里拉起 detached 浏览器/daemon（否则调用方拿不到 PID，失败清理会漏进程）。
+  if (cdpNoAutostart()) {
+    throw new Error(`CDP_NO_AUTOSTART=1: 端点 ${HOST}:${probed} 未就绪，拒绝自动启动浏览器`);
+  }
   // 端口"刚才空、进 coldStart 前被并发进程绑上"的 TOCTOU 窗口由 pickPort 兜住(那个端口没被确认占用时它会再等一轮)
   const info = await coldStart(busyProbed);
   if ('reused' in info) return { ready: true, started: false, browser: info.reused, userData: cfg?.userData };
@@ -245,8 +298,14 @@ function pidsOnPort(port: number): number[] {
     if (process.platform === 'win32') {
       return parseNetstatListeners(execFileSync('netstat', ['-ano'], { encoding: 'utf8' }), port, HOST);
     }
-    return parseLsofListeners(execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpnt'], { encoding: 'utf8' }), port, HOST);
-  } catch { return []; }
+    return parseLsofListeners(
+      execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpnt'], { encoding: 'utf8' }),
+      port,
+      HOST,
+    );
+  } catch {
+    return [];
+  }
 }
 
 /** 强制结束浏览器进程:端口从 browser.json 读;无配置则 kill 不生效。返回是否已无监听。 */
@@ -254,13 +313,17 @@ export async function killBrowser(): Promise<KillResult> {
   const p = browserConfigPath();
   if (!existsSync(p)) return { ok: false, port: 9222, reason: 'noConfig' };
   let cfg: BrowserConfig;
-  try { cfg = parseBrowserConfig(readFileSync(p, 'utf8')); }
-  catch { return { ok: false, port: 9222, reason: 'broken' }; }
+  try {
+    cfg = parseBrowserConfig(readFileSync(p, 'utf8'));
+  } catch {
+    return { ok: false, port: 9222, reason: 'broken' };
+  }
   const port = cfg.port;
   const pids = pidsOnPort(port);
   for (const pid of pids) {
     try {
-      if (process.platform === 'win32') execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore' });
+      if (process.platform === 'win32')
+        execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore' });
       else process.kill(pid, 'SIGKILL');
     } catch {}
   }

@@ -46,14 +46,19 @@ function lineOf(el: Element, ref: number): string {
 
 /** DOM 适配器 + 关键词,跑纯逻辑 searchByText 收集文本命中元素。 */
 function searchText(root: Element, needle: string): Element[] {
-  return searchByText<Element>(root, needle, {
-    // childrenOf 返回 (Element|ShadowRoot)[],但 shadowRoot.children 元素都是 Element;
-    // 取 Element[] 即可(ShadowRoot 自身无标签、不参与匹配,其子在 childrenOf 已展平)。
-    getChildren: (el) => childrenOf(el).filter((c): c is Element => c instanceof Element),
-    getText: (el) => ownElText(el),
-    isElement: (n) => n instanceof Element,
-    tagOf: (n) => (n instanceof Element ? n.tagName : ''),
-  }, { dropTags: DROP_TAGS, maxVisit: DEFAULT_MAX_VISIT });
+  return searchByText<Element>(
+    root,
+    needle,
+    {
+      // childrenOf 返回 (Element|ShadowRoot)[],但 shadowRoot.children 元素都是 Element;
+      // 取 Element[] 即可(ShadowRoot 自身无标签、不参与匹配,其子在 childrenOf 已展平)。
+      getChildren: el => childrenOf(el).filter((c): c is Element => c instanceof Element),
+      getText: el => ownElText(el),
+      isElement: n => n instanceof Element,
+      tagOf: n => (n instanceof Element ? n.tagName : ''),
+    },
+    { dropTags: DROP_TAGS, maxVisit: DEFAULT_MAX_VISIT },
+  );
 }
 
 (() => {
@@ -63,12 +68,15 @@ function searchText(root: Element, needle: string): Element[] {
   let hits: Element[] = [];
   if (a.selector) {
     // --all 时用 querySelectorAll 收全部(支持 >>> shadow 链);否则首个。
-    hits = a.all ? findRootAll(a.selector) : (findRoot(a.selector) ? [findRoot(a.selector)!] : []);
+    hits = a.all ? findRootAll(a.selector) : findRoot(a.selector) ? [findRoot(a.selector)!] : [];
   } else {
     hits = searchText(document.body, a.text!);
   }
   if (!hits.length) {
-    return setResult({ ok: false, err: a.selector ? `selector 未命中: ${a.selector}` : `未找到含文本的元素: "${a.text}"` });
+    return setResult({
+      ok: false,
+      err: a.selector ? `selector 未命中: ${a.selector}` : `未找到含文本的元素: "${a.text}"`,
+    });
   }
 
   // --all 收集全部;否则首个

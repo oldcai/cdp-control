@@ -6,16 +6,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import { formatView, markText, type ViewNode } from '../src/inject/lib/view-format.ts';
-import {
-  formatApproxChars,
-  renderBudgetedView,
-  renderFocusedBudgetedView,
-} from '../src/inject/lib/view-budget.ts';
+import { formatApproxChars, renderBudgetedView, renderFocusedBudgetedView } from '../src/inject/lib/view-budget.ts';
 
 function mk(over: Partial<ViewNode>): ViewNode {
   return {
-    tag: 'div', isContent: false, text: '', inter: false, imgAlt: '', kids: [],
-    size: 1, hasText: false, ...over,
+    tag: 'div',
+    isContent: false,
+    text: '',
+    inter: false,
+    imgAlt: '',
+    kids: [],
+    size: 1,
+    hasText: false,
+    ...over,
   };
 }
 
@@ -43,11 +46,15 @@ test('renderBudgetedView: 优先折更细的大文本区域，够用即停', () 
   const largeText = '甲'.repeat(220);
   const mediumText = '乙'.repeat(70);
   const large = mk({
-    tag: 'section', budgetRef: 1, size: 2,
+    tag: 'section',
+    budgetRef: 1,
+    size: 2,
     kids: [textNode(2, largeText)],
   });
   const medium = mk({
-    tag: 'aside', budgetRef: 3, size: 2,
+    tag: 'aside',
+    budgetRef: 3,
+    size: 2,
     kids: [textNode(4, mediumText)],
   });
   const root = prepare(mk({ tag: 'body', kids: [large, medium], size: 5 }));
@@ -59,18 +66,31 @@ test('renderBudgetedView: 优先折更细的大文本区域，够用即停', () 
   assert.ok(result.used <= 280);
   assert.ok(result.lines.some(line => line.includes('▸ [ref=2] p (1 个元素')));
   assert.ok(result.lines.some(line => line.includes('~"' + '甲'.repeat(48) + '…"')));
-  assert.ok(result.lines.some(line => line.includes(mediumText)), '未折叠的次大子树仍保留内容');
+  assert.ok(
+    result.lines.some(line => line.includes(mediumText)),
+    '未折叠的次大子树仍保留内容',
+  );
 });
 
 test('renderBudgetedView: 局部 view 的根永不折叠，只在其内部渐进折叠', () => {
   const inner = mk({
-    tag: 'div', budgetRef: 213, ref: 213, size: 2,
+    tag: 'div',
+    budgetRef: 213,
+    ref: 213,
+    size: 2,
     kids: [textNode(214, '评论'.repeat(100))],
   });
-  const root = prepare(mk({
-    tag: 'section', isContent: true, text: '评论区', ref: 48, budgetRef: 48,
-    kids: [inner], size: 3,
-  }));
+  const root = prepare(
+    mk({
+      tag: 'section',
+      isContent: true,
+      text: '评论区',
+      ref: 48,
+      budgetRef: 48,
+      kids: [inner],
+      size: 3,
+    }),
+  );
 
   const result = renderBudgetedView(root, 150);
 
@@ -163,8 +183,12 @@ test('renderFocusedBudgetedView: 焦点子树仍超预算时只在其内部继�
 
 test('renderFocusedBudgetedView: 焦点是 shadow host 时展开其内部而非仍显示普通占位', () => {
   const focus = mk({
-    tag: 'x-comments', shadow: true, ref: 20, budgetRef: 20,
-    kids: [textNode(21, 'shadow 评论内容')], size: 2,
+    tag: 'x-comments',
+    shadow: true,
+    ref: 20,
+    budgetRef: 20,
+    kids: [textNode(21, 'shadow 评论内容')],
+    size: 2,
   });
   const root = prepare(mk({ tag: 'body', kids: [focus], size: 3 }));
 
@@ -177,12 +201,20 @@ test('renderFocusedBudgetedView: 焦点是 shadow host 时展开其内部而非�
 test('renderFocusedBudgetedView: 焦点在 shadow 内部时展开焦点路径上的所有 shadow host', () => {
   const focus = textNode(22, '深层 shadow 评论');
   const innerHost = mk({
-    tag: 'x-thread', shadow: true, ref: 21, budgetRef: 21,
-    kids: [focus], size: 2,
+    tag: 'x-thread',
+    shadow: true,
+    ref: 21,
+    budgetRef: 21,
+    kids: [focus],
+    size: 2,
   });
   const outerHost = mk({
-    tag: 'x-comments', shadow: true, ref: 20, budgetRef: 20,
-    kids: [innerHost], size: 3,
+    tag: 'x-comments',
+    shadow: true,
+    ref: 20,
+    budgetRef: 20,
+    kids: [innerHost],
+    size: 3,
   });
   const root = prepare(mk({ tag: 'body', kids: [outerHost], size: 4 }));
 
@@ -224,13 +256,25 @@ test('renderFocusedBudgetedView: 合并文本末段 ref 不能冒充整段焦点
 });
 
 test('renderFocusedBudgetedView: 焦点外的短节点不应被更长摘要反向膨胀', () => {
-  const chips = Array.from({ length: 150 }, (_, index) => mk({
-    tag: 'a', isContent: true, inter: true, text: `标签${index}`,
-    ref: index + 1, budgetRef: index + 1, size: 1,
-  }));
+  const chips = Array.from({ length: 150 }, (_, index) =>
+    mk({
+      tag: 'a',
+      isContent: true,
+      inter: true,
+      text: `标签${index}`,
+      ref: index + 1,
+      budgetRef: index + 1,
+      size: 1,
+    }),
+  );
   const focus = mk({
-    tag: 'article', isContent: true, text: '焦点正文', ref: 9001, budgetRef: 9001,
-    kids: [textNode(9010, '正文'.repeat(20))], size: 2,
+    tag: 'article',
+    isContent: true,
+    text: '焦点正文',
+    ref: 9001,
+    budgetRef: 9001,
+    kids: [textNode(9010, '正文'.repeat(20))],
+    size: 2,
   });
   const root = prepare(mk({ tag: 'body', kids: [...chips, focus], size: 153 }));
   const plainChars = formatView(root).join('\n').length;
@@ -294,8 +338,12 @@ test('renderBudgetedView: shadow host 的整页占位不得按局部展开体量
   let ref = 1;
   const shadowKids = Array.from({ length: 80 }, () => textNode(ref++, '评论'.repeat(60)));
   const host = mk({
-    tag: 'x-comments', shadow: true, ref: 8001, budgetRef: 8001,
-    kids: shadowKids, size: 81,
+    tag: 'x-comments',
+    shadow: true,
+    ref: 8001,
+    budgetRef: 8001,
+    kids: shadowKids,
+    size: 81,
   });
   const paragraphs = Array.from({ length: 50 }, (_, index) => textNode(ref++, `小段落文本${index}`));
   const section = mk({ tag: 'section', budgetRef: 8002, kids: [host, ...paragraphs], size: 132 });

@@ -3,7 +3,10 @@
  * ensureBrowser 用它拿候选列表,再经 resolveExe 过滤(existsSync/command -v)、逐个尝试拉起。
  */
 export type BrowserKind = 'edge' | 'chrome' | 'chromium' | 'brave' | 'arc';
-export interface Candidate { exe: string; kind: BrowserKind; }
+export interface Candidate {
+  exe: string;
+  kind: BrowserKind;
+}
 
 function env() {
   return {
@@ -52,7 +55,14 @@ function macos(e: ReturnType<typeof env>): Candidate[] {
 }
 
 function linux(_e: ReturnType<typeof env>): Candidate[] {
-  const names = ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser', 'microsoft-edge-stable', 'microsoft-edge'];
+  const names = [
+    'google-chrome-stable',
+    'google-chrome',
+    'chromium',
+    'chromium-browser',
+    'microsoft-edge-stable',
+    'microsoft-edge',
+  ];
   return names.map(n => ({ exe: n, kind: (/edge/.test(n) ? 'edge' : 'chrome') as BrowserKind }));
 }
 

@@ -6,7 +6,10 @@
  */
 
 /** 参与 diff 的最小 tab 结构(transport.Target 的子集:仅 id/url 参与比对)。 */
-export interface TabSnap { id: string; url: string }
+export interface TabSnap {
+  id: string;
+  url: string;
+}
 
 /** 两次快照的 tab 差异:opened=本次新增、closed=本次消失、navigated=同一 tab 跳转。 */
 export interface TabDiff {

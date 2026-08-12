@@ -4,12 +4,7 @@
  * 输入必须是已经建完树、分配完 ref 并 markText 的 ViewNode。算法只维护独立的
  * `budgetRef -> 折叠摘要` 映射，再交给 formatView 重渲染；不修改树与 ref。
  */
-import {
-  formatView,
-  formatViewWithSpans,
-  type ViewFormatSpan,
-  type ViewNode,
-} from './view-format.ts';
+import { formatView, formatViewWithSpans, type ViewFormatSpan, type ViewNode } from './view-format.ts';
 import { cut } from './view-utils.ts';
 
 export interface BudgetRenderResult {
@@ -92,8 +87,10 @@ function foldSummary(
   const elements = Math.max(1, node.size);
   const limit = maxLen == null ? 48 : Math.min(48, Math.max(0, maxLen));
   const preview = cut(firstPreview(node), limit);
-  return `▸ [ref=${ref}] ${label} (${elements} 个元素 · 约 ${formatApproxChars(renderedSize)} 字)`
-    + (preview ? ` ~"${preview}"` : '');
+  return (
+    `▸ [ref=${ref}] ${label} (${elements} 个元素 · 约 ${formatApproxChars(renderedSize)} 字)` +
+    (preview ? ` ~"${preview}"` : '')
+  );
 }
 
 /**
@@ -271,9 +268,7 @@ function planForest(
   const available = [...candidates]
     .filter(candidate => candidate.capacity > 0)
     .sort((left, right) => {
-      const capacityOrder = order === 'ascending'
-        ? left.capacity - right.capacity
-        : right.capacity - left.capacity;
+      const capacityOrder = order === 'ascending' ? left.capacity - right.capacity : right.capacity - left.capacity;
       return capacityOrder || left.order - right.order;
     });
   if (!available.length) return emptyPlan();
@@ -282,9 +277,10 @@ function planForest(
   let remaining = target;
   for (const candidate of available) {
     if (remaining <= 0) break;
-    const part = candidate.capacity < remaining
-      ? maxPlan(candidate, maxMemo)
-      : planCandidate(candidate, remaining, order, maxMemo);
+    const part =
+      candidate.capacity < remaining
+        ? maxPlan(candidate, maxMemo)
+        : planCandidate(candidate, remaining, order, maxMemo);
     if (!part.candidates.length) continue;
     parts.push(part);
     remaining -= part.saving;
@@ -333,7 +329,10 @@ function finishBudget(
     const descending = planForest(collection.roots, target, 'descending', maxPlanMemo);
     const plan = betterPlan(target, ascending, descending) ?? emptyPlan();
     if (!plan.candidates.length) break;
-    const planKey = plan.candidates.map(candidate => candidate.ref).sort((a, b) => a - b).join(',');
+    const planKey = plan.candidates
+      .map(candidate => candidate.ref)
+      .sort((a, b) => a - b)
+      .join(',');
     if (planKey === previousPlanKey) {
       // 结构输出/账单开销可能让同一估算方案仍差少量字符。
       // 继续抬高目标让规划器跨到下一个更粗的方案，而不是立即放弃。
