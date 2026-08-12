@@ -33,7 +33,6 @@ import {
   hasCdpWebSocket,
   lsofListenerArgs,
   parseNetstatListenersForHosts,
-  parseLsofListeners,
   parseLsofListenersForHosts,
   planListenerCleanup,
   probeHostCdp,
@@ -111,6 +110,11 @@ async function waitReady(
   timeoutMs = 20000,
   launched: BrowserChild | null = lastLaunch.launched,
   assertAuthority?: () => void,
+  probe: (timeoutMs: number) => Promise<boolean> = async probeTimeoutMs => {
+    const result = await probeReady(probeTimeoutMs);
+    return result.ready;
+  },
+  assertEndpoint?: () => void | Promise<void>,
 ): Promise<void> {
   let earlyExit: string | null = null;
   const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
@@ -122,14 +126,12 @@ async function waitReady(
   }
   try {
     const dependencies = {
-      probe: async (probeTimeoutMs: number) => {
-        const probe = await probeReady(probeTimeoutMs);
-        return probe.ready;
-      },
+      probe,
       exitReason: () => earlyExit,
       sleep,
       now: Date.now,
       ...(assertAuthority ? { assertAuthority } : {}),
+      ...(assertEndpoint ? { assertEndpoint } : {}),
     };
     await waitForCdpReady(dependencies, timeoutMs);
   } finally {
@@ -171,13 +173,28 @@ async function probeReady(timeoutMs = 5000): Promise<ProbeResult> {
   return probe;
 }
 
+/** 破坏性固定端口门禁只探测本轮已固定的数值地址，绝不在中途重新解析 hostname。 */
+async function probeReadyForHosts(resolvedHosts: string[], timeoutMs = 5000): Promise<ProbeResult> {
+  const probe = await probeHostCdp({
+    originalHost: HOST,
+    primary: async () => ({ ready: false }),
+    resolveAddresses: async () => resolvedHosts,
+    address: address => probeResolvedCdp(address, timeoutMs),
+  });
+  if (probe.ready && probe.address) setEndpointHost(probe.address);
+  return probe;
+}
+
 /** 忙端口的并发冷启动宽限；单次请求和轮询睡眠都受同一 deadline 约束。 */
-async function probeReadySoon(timeoutMs = 3000): Promise<{ ready: boolean; browser?: string }> {
+async function probeReadySoonForHosts(
+  resolvedHosts: string[],
+  timeoutMs = 3000,
+): Promise<{ ready: boolean; browser?: string }> {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) return { ready: false };
-    const probe = await probeReady(Math.min(1000, remaining));
+    const probe = await probeReadyForHosts(resolvedHosts, Math.min(1000, remaining));
     if (probe.ready) return probe;
     const pause = Math.min(200, deadline - Date.now());
     if (pause <= 0) return { ready: false };
@@ -202,13 +219,7 @@ function resolveExe(exe: string): string | null {
 }
 
 /** connect 先挡 Windows SO_REUSEADDR 的 bind 假空闲，再以严格 bind 确认真的可用。 */
-async function portState(port: number): Promise<PortState> {
-  let hosts: string[];
-  try {
-    hosts = await resolvedSocketHosts();
-  } catch (cause) {
-    return { state: 'unknown', reason: `解析 ${HOST} 失败: ${cause instanceof Error ? cause.message : String(cause)}` };
-  }
+function portStateForHosts(port: number, hosts: string[]): Promise<PortState> {
   return probePortAddresses(port, hosts, {
     connect: connectAddressState,
     bind: bindAddressState,
@@ -289,10 +300,8 @@ function resolvedSocketHosts(): Promise<string[]> {
 }
 
 /** 只枚举真正服务 `HOST:port` 的 TCP LISTEN listener；命令失败保留真因并由门禁拒绝继续。 */
-async function listenerPids(port: number): Promise<number[]> {
-  let resolvedHosts: string[] = [];
+async function listenerPidsForHosts(port: number, resolvedHosts: string[]): Promise<number[]> {
   try {
-    resolvedHosts = await resolvedSocketHosts();
     if (process.platform === 'win32') {
       const { stdout } = await execFileAsync('netstat', ['-ano'], { encoding: 'utf8' });
       return parseNetstatListenersForHosts(stdout, port, resolvedHosts);
@@ -317,9 +326,7 @@ async function listenerPids(port: number): Promise<number[]> {
       !stderr
     ) {
       // lsof status=1 表示没有匹配项；若同时带 stdout，仍按机器格式解析。
-      return resolvedHosts.length
-        ? parseLsofListenersForHosts(stdout, port, resolvedHosts)
-        : parseLsofListeners(stdout, port, HOST);
+      return parseLsofListenersForHosts(stdout, port, resolvedHosts);
     }
     const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : 'unknown';
     throw new Error(`枚举配置端口 ${HOST}:${port} 的监听进程失败(${code})${stderr ? `: ${stderr}` : ''}`, {
@@ -340,12 +347,37 @@ function killPid(pid: number): void {
 
 type AuthorityGuard = (port: number) => void;
 
-function fixedPortDependencies(assertAuthority?: AuthorityGuard): Omit<FixedPortDependencies, 'launch'> {
+function sameResolvedHosts(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every(host => rightSet.has(host));
+}
+
+async function fixedPortDependencies(assertAuthority?: AuthorityGuard): Promise<Omit<FixedPortDependencies, 'launch'>> {
+  let resolvedHosts: string[];
+  try {
+    resolvedHosts = [...(await resolvedSocketHosts())];
+  } catch (cause) {
+    throw new FixedPortError(`无法解析 CDP_HOST ${HOST} 的地址集合，拒绝执行固定端口门禁`, { cause });
+  }
   const dependencies: Omit<FixedPortDependencies, 'launch'> = {
-    probe: async () => probeReady(1000),
-    busyGraceProbe: async () => probeReadySoon(3000),
-    portState,
-    listenerPids,
+    probe: async () => probeReadyForHosts(resolvedHosts, 1000),
+    busyGraceProbe: async () => probeReadySoonForHosts(resolvedHosts, 3000),
+    portState: port => portStateForHosts(port, resolvedHosts),
+    listenerPids: port => listenerPidsForHosts(port, resolvedHosts),
+    assertAddressSet: async () => {
+      let currentHosts: string[];
+      try {
+        currentHosts = await resolvedSocketHosts();
+      } catch (cause) {
+        throw new FixedPortError(`无法复核 CDP_HOST ${HOST} 的解析地址集合，拒绝执行破坏性操作`, { cause });
+      }
+      if (!sameResolvedHosts(resolvedHosts, currentHosts)) {
+        throw new FixedPortError(
+          `CDP_HOST ${HOST} 的解析地址集合已变化(${resolvedHosts.join(', ')} -> ${currentHosts.join(', ')})，拒绝执行破坏性操作`,
+        );
+      }
+    },
     killPid,
     sleep,
   };
@@ -367,27 +399,37 @@ async function prepareAndLaunch(
 ): Promise<{
   decision: Awaited<ReturnType<typeof prepareFixedPort>>;
   launched: BrowserChild | null;
+  dependencies: Omit<FixedPortDependencies, 'launch'>;
 }> {
   setPort(cfg.port);
   let launched: BrowserChild | null = null;
+  const dependencies = await fixedPortDependencies(assertAuthority);
   const decision = await prepareFixedPort(cfg.port, {
-    ...fixedPortDependencies(assertAuthority),
+    ...dependencies,
     launch: async () => {
       launched = recordLaunchAttempt(attempt, await launch(cfg.exe, cfg.args, cfg.port, cfg.userData));
     },
   });
-  return { decision, launched };
+  return { decision, launched, dependencies };
 }
 
-function settleLaunchedPort(
+async function settleLaunchedPort(
   port: number,
   assertAuthority: AuthorityGuard,
   launched: BrowserChild | null,
+  dependencies: Omit<FixedPortDependencies, 'launch'>,
 ): ReturnType<typeof settleFixedPortLaunch> {
   return settleFixedPortLaunch(
     port,
-    () => waitReady(20000, launched, () => assertAuthority(port)),
-    fixedPortDependencies(assertAuthority),
+    () =>
+      waitReady(
+        20000,
+        launched,
+        () => assertAuthority(port),
+        async () => (await dependencies.probe(port)).ready,
+        dependencies.assertAddressSet,
+      ),
+    dependencies,
   );
 }
 
@@ -506,7 +548,7 @@ async function coldStartAuthorityAttempt(
       const prepared = await prepareAndLaunch(cfg, assertAuthority, launchAttempt);
       decision = prepared.decision;
       if (decision.action === 'reuse') return { reused: true, browser: decision.browser, userData: cfg.userData };
-      const settled = await settleLaunchedPort(cfg.port, assertAuthority, prepared.launched);
+      const settled = await settleLaunchedPort(cfg.port, assertAuthority, prepared.launched, prepared.dependencies);
       if (settled.action === 'reuse') return { reused: true, browser: settled.browser, userData: cfg.userData };
     } catch (cause) {
       if (cause instanceof BrowserAuthorityChanged) throw cause;
@@ -540,7 +582,7 @@ async function coldStartAuthorityAttempt(
       );
       const decision = prepared.decision;
       if (decision.action === 'reuse') return { reused: true, browser: decision.browser, userData };
-      const settled = await settleLaunchedPort(port, assertAuthority, prepared.launched);
+      const settled = await settleLaunchedPort(port, assertAuthority, prepared.launched, prepared.dependencies);
       if (settled.action === 'reuse') return { reused: true, browser: settled.browser, userData };
     } catch (cause) {
       launchAttempt.cleanup(terminateChild);
@@ -624,10 +666,11 @@ export async function killBrowser(): Promise<KillResult> {
   }
   const port = cfg.port;
   const assertAuthority = browserAuthorityGuard(cfg);
-  const plan = await planListenerCleanup(port, { assertAuthority, portState, listenerPids });
+  const dependencies = await fixedPortDependencies(assertAuthority);
+  const plan = await planListenerCleanup(port, dependencies);
   if (plan.action === 'noProcess') return { ok: true, port, reason: 'noProcess' };
   if (plan.action === 'stillUp') return { ok: false, port, reason: 'stillUp' };
-  const release = await reclaimFixedPortListeners(port, plan.pids, { assertAuthority, killPid, portState, sleep });
+  const release = await reclaimFixedPortListeners(port, plan.pids, dependencies);
   if (release.state !== 'free') return { ok: false, port, reason: 'stillUp' };
   return release.killFailures.length ? { ok: false, port, reason: 'killFailed' } : { ok: true, port, reason: 'killed' };
 }

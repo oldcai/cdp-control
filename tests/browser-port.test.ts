@@ -277,6 +277,33 @@ test('waitForCdpReady: 子进程早退后对并发 CDP 有界复探，但保留�
   assert.equal(now, 2_000);
 });
 
+test('waitForCdpReady: probe 错误可重试，但地址身份 guard 变化必须立即 fail closed', async () => {
+  const dnsChanged = new Error('DNS changed during launch wait fixture');
+  let slept = false;
+
+  await assert.rejects(
+    () =>
+      waitForCdpReady(
+        {
+          probe: async () => {
+            throw new Error('transient probe fixture');
+          },
+          exitReason: () => null,
+          assertEndpoint: () => {
+            throw dnsChanged;
+          },
+          sleep: async () => {
+            slept = true;
+          },
+          now: () => 0,
+        },
+        20_000,
+      ),
+    error => error === dnsChanged,
+  );
+  assert.equal(slept, false);
+});
+
 test('settleFixedPortLaunch: exact child 早退后并发 CDP 就绪必须分类为 reuse', async () => {
   let now = 0;
   let waitProbes = 0;
@@ -305,6 +332,28 @@ test('settleFixedPortLaunch: exact child 早退后并发 CDP 就绪必须分类�
   assert.deepEqual(d.calls, ['probe:24129']);
 });
 
+test('settleFixedPortLaunch: waitReady 成功后地址身份变化必须 fail closed，不能误报 launch', async () => {
+  const dnsChanged = new Error('DNS changed after launch readiness fixture');
+  let checks = 0;
+
+  await assert.rejects(
+    () =>
+      settleFixedPortLaunch(24132, async () => undefined, {
+        assertAddressSet: () => {
+          checks += 1;
+          throw dnsChanged;
+        },
+        probe: async () => ({ ready: false }),
+        portState: async () => ({ state: 'free' }),
+        listenerPids: async () => [],
+        killPid: () => undefined,
+        sleep: async () => undefined,
+      }),
+    error => error === dnsChanged,
+  );
+  assert.equal(checks, 2, '失败恢复也必须沿用同一地址 guard，而不是换快照继续');
+});
+
 test('waitForCdpReady: 早退宽限结束仍无健康 CDP 时保留真实退出原因', async () => {
   let now = 0;
   await assert.rejects(
@@ -327,9 +376,9 @@ test('waitForCdpReady: 早退宽限结束仍无健康 CDP 时保留真实退出�
   assert.equal(now, 3_000);
 });
 
-test('killListenerPids: 单个 listener 结束失败仍尝试其余 PID，并聚合真因', () => {
+test('killListenerPids: 单个 listener 结束失败仍尝试其余 PID，并聚合真因', async () => {
   const attempted: number[] = [];
-  const failures = killListenerPids([711, 712], pid => {
+  const failures = await killListenerPids([711, 712], pid => {
     attempted.push(pid);
     if (pid === 711) throw new Error('EPERM fixture');
   });
@@ -422,6 +471,55 @@ test('reclaimFixedPortListeners: 权威配置已变化时在首个 kill 前 fail
     error => error === authorityChanged,
   );
   assert.deepEqual(killed, []);
+});
+
+test('prepareFixedPort: 破坏性门禁的 DNS 地址集合变化时 fail closed，绝不 kill', async () => {
+  const dnsChanged = new Error('DNS address set changed fixture');
+  const killed: number[] = [];
+  let addressSet = '192.0.2.10,192.0.2.11';
+  const assertAddressSet = (): void => {
+    if (addressSet !== '192.0.2.10,192.0.2.11') throw dnsChanged;
+  };
+
+  await assert.rejects(
+    () =>
+      prepareFixedPort(24130, {
+        probe: async () => ({ ready: false }),
+        portState: async () => ({ state: 'busy' }),
+        listenerPids: async () => {
+          addressSet = '192.0.2.12';
+          return [941];
+        },
+        assertAddressSet,
+        killPid: pid => killed.push(pid),
+        sleep: async () => undefined,
+      }),
+    error => error === dnsChanged,
+  );
+  assert.deepEqual(killed, []);
+});
+
+test('reclaimFixedPortListeners: 每个 PID 前复核 DNS 地址集合，变化后不再 kill 后续 listener', async () => {
+  const dnsChanged = new Error('DNS address set changed between PIDs fixture');
+  const killed: number[] = [];
+  let addressSetChanged = false;
+
+  await assert.rejects(
+    () =>
+      reclaimFixedPortListeners(24131, [951, 952], {
+        assertAddressSet: () => {
+          if (addressSetChanged) throw dnsChanged;
+        },
+        killPid: pid => {
+          killed.push(pid);
+          addressSetChanged = true;
+        },
+        portState: async () => ({ state: 'busy' }),
+        sleep: async () => undefined,
+      }),
+    error => error === dnsChanged,
+  );
+  assert.deepEqual(killed, [951]);
 });
 
 function dependencies(
