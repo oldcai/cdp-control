@@ -157,11 +157,12 @@ async function probeResolvedCdp(address: string, timeoutMs: number): Promise<Pro
 }
 
 /**
- * ready 探活：单一数值 host 的健康主连接仍只做一次 GET；localhost/DNS 多地址
- * 则逐数值地址复核并 pin，防止健康 CDP 被 listener 并集误杀或后续连接漂到非 CDP 地址。
+ * ready 探活：原始 host 已是数值地址时只做一次 GET。所有 DNS hostname
+ * 都要验证返回的数值地址再 pin；无法归属则 fail closed。
  */
 async function probeReady(timeoutMs = 5000): Promise<ProbeResult> {
   const probe = await probeHostCdp({
+    originalHost: HOST,
     primary: async () => cdpProbeResult(await getJson('/json/version', timeoutMs)),
     resolveAddresses: resolvedSocketHosts,
     address: address => probeResolvedCdp(address, timeoutMs),
@@ -587,7 +588,7 @@ async function coldStart(initialConfig: BrowserConfig | null): Promise<ColdStart
   throw new FixedPortError('browser.json 的权威配置持续变化，拒绝执行浏览器回收或启动');
 }
 
-/** 确保有 CDP 浏览器在跑：就绪时安全复用，未就绪自动拉起。 */
+/** 确保有 CDP 浏览器在跑:就绪零开销(1 GET);未就绪自动拉起。 */
 export async function ensureBrowser(): Promise<EnsureResult> {
   // 探活前后都重读权威配置；无配置时固定 9222，不能继承 CDP_PORT 等漂移值。
   let state: Awaited<ReturnType<typeof probeAuthoritativeConfig>>;

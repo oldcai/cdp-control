@@ -7,7 +7,7 @@ import { isIP } from 'node:net';
 export interface ProbeResult {
   ready: boolean;
   browser?: string;
-  /** 主 hostname 未选中健康端点时，需要 pin 的已解析数值地址。 */
+  /** 需要 pin 的已解析数值地址；多地址 hostname 成功探活后也必须带回。 */
   address?: string;
 }
 export type PortState = { state: 'free' } | { state: 'busy' } | { state: 'unknown'; reason: string };
@@ -82,14 +82,17 @@ export async function resolveSocketHosts(host: string, lookupAll: LookupAll): Pr
 }
 
 export interface HostCdpProbeDependencies {
+  /** 原始 CDP_HOST；只有它本身是数值地址时才允许跳过二次探活。 */
+  originalHost?: string;
   primary(): Promise<ProbeResult>;
   resolveAddresses(): Promise<string[]>;
   address(host: string): Promise<ProbeResult>;
 }
 
 /**
- * readiness 与 listener 归属必须覆盖同一地址集合。单一解析地址且主连接健康时可
- * 直接归属；多地址即使主连接健康也要逐数值地址复核，返回真正健康的地址交由调用方 pin。
+ * 主 hostname 连接未就绪时检查全部解析地址。多地址 hostname 即使主请求成功，
+ * 也必须把健康 CDP 归属到具体数值地址再 pin，避免后续请求/daemon 重新解析到非 CDP 端点。
+ * 单一数值 host 保留一 GET 快路径。
  */
 export async function probeHostCdp(deps: HostCdpProbeDependencies): Promise<ProbeResult> {
   let primary: ProbeResult = { ready: false };
@@ -102,14 +105,15 @@ export async function probeHostCdp(deps: HostCdpProbeDependencies): Promise<Prob
     addresses = await deps.resolveAddresses();
   } catch (cause) {
     if (primary.ready) {
-      throw new FixedPortError('主 hostname 返回健康 CDP，但无法解析其数值地址，拒绝继续以避免后续连接漂移', {
-        cause,
-      });
+      throw new FixedPortError('无法解析 CDP_HOST 的全部地址，拒绝在未归属的健康端点上继续', { cause });
     }
     // portState 会将同一解析失败归类为 unknown，由固定端口门禁报真因。
     return { ready: false };
   }
-  if (primary.ready && addresses.length === 1) return { ...primary, address: addresses[0] };
+
+  if (primary.ready && addresses.length <= 1 && isIP(socketHost(deps.originalHost ?? '')) !== 0) {
+    return addresses[0] ? { ...primary, address: addresses[0] } : primary;
+  }
 
   const resolved = await Promise.all(
     addresses.map(async address => {
@@ -123,7 +127,9 @@ export async function probeHostCdp(deps: HostCdpProbeDependencies): Promise<Prob
   const healthy = resolved.find(result => result.probe.ready);
   if (healthy) return { ...healthy.probe, address: healthy.address };
   if (primary.ready) {
-    throw new FixedPortError('主 hostname 返回健康 CDP，但无法归属到任一数值地址，拒绝继续以避免后续连接漂移');
+    throw new FixedPortError(
+      `hostname 探活成功，但未能把健康 CDP 归属到任一解析地址(${addresses.join(', ')})，拒绝继续`,
+    );
   }
   return { ready: false };
 }

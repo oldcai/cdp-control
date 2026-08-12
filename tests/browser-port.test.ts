@@ -112,10 +112,11 @@ test('probeHostCdp: 主连接未就绪时复用其他解析地址的健康 CDP',
   assert.deepEqual(calls, ['primary', 'resolve', 'address:192.0.2.44', 'address:2001:db8::44']);
 });
 
-test('probeHostCdp: 单一解析地址的主连接健康时一次探活即可 pin', async () => {
+test('probeHostCdp: 原始 host 已是单一数值地址时只做一次探活并带回该地址', async () => {
   const calls: string[] = [];
   assert.deepEqual(
     await probeHostCdp({
+      originalHost: '127.0.0.1',
       primary: async () => {
         calls.push('primary');
         return { ready: true, browser: 'Chrome/primary' };
@@ -134,13 +135,49 @@ test('probeHostCdp: 单一解析地址的主连接健康时一次探活即可 pi
   assert.deepEqual(calls, ['primary', 'resolve']);
 });
 
-test('probeHostCdp: 多地址主连接健康也必须归属并 pin 到具体健康地址', async () => {
+test('probeHostCdp: DNS hostname 即使只解析到一个地址也必须验证后再 pin', async () => {
+  const calls: string[] = [];
+  assert.deepEqual(
+    await probeHostCdp({
+      originalHost: 'cdp.example.test',
+      primary: async () => {
+        calls.push('primary');
+        return { ready: true, browser: 'Chrome/hostname' };
+      },
+      resolveAddresses: async () => {
+        calls.push('resolve');
+        return ['192.0.2.99'];
+      },
+      address: async host => {
+        calls.push(`address:${host}`);
+        return host === '192.0.2.99' ? { ready: true, browser: 'Chrome/verified-single' } : { ready: false };
+      },
+    }),
+    { ready: true, browser: 'Chrome/verified-single', address: '192.0.2.99' },
+  );
+  assert.deepEqual(calls, ['primary', 'resolve', 'address:192.0.2.99']);
+});
+
+test('probeHostCdp: DNS 单地址无法验证主探活时 fail closed，不得 pin 未验证地址', async () => {
+  await assert.rejects(
+    () =>
+      probeHostCdp({
+        originalHost: 'cdp.example.test',
+        primary: async () => ({ ready: true, browser: 'Chrome/hostname' }),
+        resolveAddresses: async () => ['192.0.2.99'],
+        address: async () => ({ ready: false }),
+      }),
+    error => error instanceof FixedPortError && /未能把健康 CDP 归属/.test(error.message),
+  );
+});
+
+test('probeHostCdp: 主连接健康但多地址中仅后一个是 CDP 时必须 pin 该数值地址', async () => {
   const calls: string[] = [];
   assert.deepEqual(
     await probeHostCdp({
       primary: async () => {
         calls.push('primary');
-        return { ready: true, browser: 'Chrome/hostname-primary' };
+        return { ready: true, browser: 'Chrome/hostname' };
       },
       resolveAddresses: async () => {
         calls.push('resolve');
@@ -148,27 +185,23 @@ test('probeHostCdp: 多地址主连接健康也必须归属并 pin 到具体健�
       },
       address: async host => {
         calls.push(`address:${host}`);
-        return host === '2001:db8::44' ? { ready: true, browser: 'Chrome/resolved-owner' } : { ready: false };
+        return host === '2001:db8::44' ? { ready: true, browser: 'Chrome/healthy-other-address' } : { ready: false };
       },
     }),
-    { ready: true, browser: 'Chrome/resolved-owner', address: '2001:db8::44' },
+    { ready: true, browser: 'Chrome/healthy-other-address', address: '2001:db8::44' },
   );
   assert.deepEqual(calls, ['primary', 'resolve', 'address:192.0.2.44', 'address:2001:db8::44']);
 });
 
-test('probeHostCdp: 多地址 primary 健康但无法归属数值地址时 fail closed', async () => {
+test('probeHostCdp: 主连接健康却无法归属到任一解析地址时 fail closed', async () => {
   await assert.rejects(
     () =>
       probeHostCdp({
-        primary: async () => ({ ready: true, browser: 'Chrome/ambiguous-primary' }),
-        resolveAddresses: async () => ['192.0.2.44', '192.0.2.45'],
+        primary: async () => ({ ready: true, browser: 'Chrome/hostname' }),
+        resolveAddresses: async () => ['192.0.2.44', '2001:db8::44'],
         address: async () => ({ ready: false }),
       }),
-    (error: unknown) => {
-      assert.ok(error instanceof FixedPortError);
-      assert.match(error.message, /健康 CDP.*数值地址.*拒绝/);
-      return true;
-    },
+    error => error instanceof FixedPortError && /未能把健康 CDP 归属/.test(error.message),
   );
 });
 
