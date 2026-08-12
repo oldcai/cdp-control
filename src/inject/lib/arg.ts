@@ -28,7 +28,8 @@ export interface FillArgs {
  * folds:当前 hostname 命中的持久折叠规则(Node 侧 folds.ts 过滤后传入),buildView 遇匹配 selector 折叠成一行。
  * scrollToLoad:启用滚动加载。无 scrollPages/scrollTo 时为默认 ±1 屏回弹;给 scrollPages 改为循环向下滚 N 屏
  *   (边滚边检测 scrollHeight 增长,连续 2 次不增长提前停);给 scrollTo 改为先滚到该 selector 元素再建视图
- *   (B站评论区等容器)。两者可并用(先滚到元素,再循环滚 N 屏)。 */
+ *   (B站评论区等容器)。两者可并用(先滚到元素,再循环滚 N 屏)。
+ * budget:最终结构树的总字符预算。建树和 ref 分配完成后按子树渲染体量降序自动折叠。 */
 export interface FoldItem {
   selector: string;
   note: string;
@@ -45,6 +46,8 @@ export interface ViewArgs {
   folds?: FoldItem[];
   ignoreLinks?: string[];
   maxLen?: number; // 文本截断阈值(字符数);缺省不截断(view 全量)
+  budget?: number; // 总渲染字符预算;缺省不开启
+  focus?: number; // 整页保留骨架、只展开该既有 ref 的子树;须与 budget 同用
 }
 
 /** locate:按 view 的 ref 序号反查稳定 CSS selector,可选 --ancestor 向上爬 N 层。 */

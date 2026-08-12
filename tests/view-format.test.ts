@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { markText, formatView, type ViewNode } from '../src/inject/lib/view-format.ts';
+import { formatView, formatViewWithSpans, markText, type ViewNode } from '../src/inject/lib/view-format.ts';
 import { leafText } from '../src/inject/lib/view-utils.ts';
 
 /** 构造 ViewNode 的便捷 helper:size 由 markText 前手动填,hasText 由 markText 重算。 */
@@ -52,6 +52,28 @@ test('formatView: 两个以上非内联 productive 后代各自成行', () => {
   markText(root);
   // section 作为分支标签单独一行,两个长后代各自缩进成行
   assert.deepEqual(formatView(root), ['div', '  section', '    p "' + long1 + '"', '    h2 "' + long2 + '"']);
+});
+
+test('formatViewWithSpans: 与普通渲染同源，节点区间对应整页实际输出', () => {
+  const long1 = '核心'.repeat(13);
+  const long2 = '要点'.repeat(13);
+  const p = mk({ tag: 'p', isContent: true, text: long1, ref: 1, budgetRef: 1, size: 1 });
+  const h2 = mk({ tag: 'h2', isContent: true, text: long2, ref: 2, budgetRef: 2, size: 1 });
+  const section = mk({ tag: 'section', budgetRef: 3, size: 3, kids: [p, h2] });
+  const root = mk({ tag: 'body', size: 4, kids: [section] });
+  markText(root);
+
+  const result = formatViewWithSpans(root);
+  assert.deepEqual(result.lines, formatView(root));
+  const sectionSpan = result.spans.find(span => span.node === section);
+  assert.ok(sectionSpan);
+  const renderedSlice = result.lines.slice(sectionSpan.startLine, sectionSpan.endLine).join('\n');
+  assert.equal(sectionSpan.renderedChars, renderedSlice.length);
+  assert.deepEqual(result.lines.slice(sectionSpan.startLine, sectionSpan.endLine), [
+    '  section',
+    '    p "' + long1 + '" [ref=1]',
+    '    h2 "' + long2 + '" [ref=2]',
+  ]);
 });
 
 test('formatView: span 单文本行(!hasChildText && span && text → "text")', () => {

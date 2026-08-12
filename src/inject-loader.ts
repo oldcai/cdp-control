@@ -36,7 +36,7 @@ export function inject(name: string, args?: unknown): string {
 /** 结构视图入口(唯一感知命令)。锚点互斥:ref 优先,其次 selector,缺省整页 body;
  * visibleOnly 只输出视口内可见;ancestor 为统一爬父修饰符(对任一锚点生效);folds 为当前 hostname 命中的折叠规则。
  * scrollToLoad 启用滚动加载(默认 ±1 屏回弹);scrollPages 循环滚 N 屏(边滚边检测增长);
- * scrollTo 先滚到该 selector 元素(B站评论区容器)。 */
+ * scrollTo 先滚到该 selector 元素(B站评论区容器);budget 在 ref 分配后限制总渲染字符数。 */
 export function viewExpr(
   selector?: string,
   visibleOnly?: boolean,
@@ -49,6 +49,8 @@ export function viewExpr(
   scrollWait?: number,
   ignoreLinks?: string[],
   maxLen?: number,
+  budget?: number,
+  focus?: number,
 ): string {
   return inject('view', {
     selector,
@@ -62,6 +64,8 @@ export function viewExpr(
     folds,
     ignoreLinks,
     maxLen: maxLen != null ? maxLen : undefined,
+    budget: budget != null ? budget : undefined,
+    focus: focus != null ? focus : undefined,
   });
 }
 

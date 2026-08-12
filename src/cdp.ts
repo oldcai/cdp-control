@@ -35,12 +35,18 @@ interface DispatchOptions extends ViewOpts {
 
 /**
  * view/fetch 共用的感知分发:默认跑命中 recipe(站点摘要),未命中或用户表达建树意图 → 纯结构树。
- * 建树意图(强制树)= --tree / 位置 ref / --selector-file / --visible-only / --scroll-* 任一。
+ * 建树意图(强制树)= --tree / 位置 ref / --selector-file / --visible-only / --scroll-* / --budget / --focus 任一。
  * 分发在 CLI action 顶层,`api.view` 保持纯结构(fetchPage/操作反馈内部照旧用,无递归)。
  */
 async function dispatchView(target: Target, opts: DispatchOptions): Promise<{ lines: string[]; recipe: boolean }> {
   const treeIntent =
-    !!opts.tree || opts.ref != null || opts.selector != null || !!opts.visibleOnly || !!opts.scrollToLoad;
+    !!opts.tree ||
+    opts.ref != null ||
+    opts.selector != null ||
+    !!opts.visibleOnly ||
+    !!opts.scrollToLoad ||
+    opts.budget != null ||
+    opts.focus != null;
   if (!treeIntent) {
     const d = await runRecipe(target.url, api, target, opts);
     if (d) return { lines: d.lines, recipe: true };
@@ -208,7 +214,7 @@ targetCmd('eval', '在页面执行 JS,返回 JSON 值')
 
 targetCmd(
   'view',
-  '感知:命中 recipe 输出站点摘要,否则整页结构树(建树意图任一带--tree/位置ref/--selector-file/--visible-only/--scroll-* 则强制树)',
+  '感知:命中 recipe 输出站点摘要,否则整页结构树(建树意图任一带--tree/位置ref/--selector-file/--visible-only/--scroll-*/--budget/--focus 则强制树)',
 )
   .argument('[n]', 'view 输出的 ref 序号建视图根(不传则从根 body 建树;与 --selector-file 二选一;给了即强制树)')
   .option('--tree', '强制结构树(即便命中 recipe 也建树)')
@@ -235,13 +241,23 @@ targetCmd(
     '与 --scroll-to-load 配合:滚动触发懒加载后等待内容渲染的毫秒数(默认 1000;调大给新回答/评论区更多加载时间)',
   )
   .option('--max-len <n>', '文本截断阈值(字符数);缺省不截断,设值则所有文本片截到 n 并补省略号')
+  .option('--budget <chars>', '总渲染字符预算;超出时按子树渲染体量从大到小自动折叠,末尾输出预算账')
+  .option('--focus <ref>', '整页骨架全折,只展开指定既有 ref 的子树(必须与 --budget 配合)')
   .action(async (n, opts) => {
     const sel = readOptFile(opts.selectorFile);
     const ref = n != null ? Number(n) : undefined;
+    const focus = opts.focus != null ? Number(opts.focus) : undefined;
     if (ref != null && sel) throw new Error('ref 序号与 --selector-file 只能选其一');
+    if (focus != null && (ref != null || sel)) throw new Error('--focus 与位置 ref / --selector-file 不能同时使用');
     if ((opts.scrollPages != null || opts.scrollTo != null) && !opts.scrollToLoad) {
       throw new Error('--scroll-pages / --scroll-to 必须与 --scroll-to-load 配合使用');
     }
+    const budget = opts.budget != null ? Number(opts.budget) : undefined;
+    if (budget != null && (!Number.isSafeInteger(budget) || budget <= 0)) {
+      throw new Error('--budget 必须是正整数');
+    }
+    if (focus != null && (!Number.isSafeInteger(focus) || focus < 0)) throw new Error('--focus 必须是非负整数 ref');
+    if (focus != null && budget == null) throw new Error('--focus 必须与 --budget 配合使用');
     const target = await needTarget(opts.target);
     const d = await dispatchView(target, {
       tree: !!opts.tree,
@@ -254,6 +270,8 @@ targetCmd(
       scrollTo: opts.scrollTo || undefined,
       scrollWait: opts.scrollWait != null ? Number(opts.scrollWait) : undefined,
       maxLen: opts.maxLen != null ? Number(opts.maxLen) : undefined,
+      budget,
+      focus,
     });
     if (!d.lines.length) {
       console.log('(空树)');
