@@ -25,6 +25,7 @@ export interface DaemonPollOptions {
 }
 
 export interface EnsureDaemonOptions extends DaemonPollOptions {
+  retireLegacyImpl: () => Promise<void>;
   spawnImpl: () => Promise<void>;
 }
 
@@ -120,7 +121,7 @@ export async function probeDaemonHealth(
 export async function retireLegacyDaemon(
   port: number,
   expected: DaemonIdentity,
-  options: DaemonPollOptions = {},
+  options: DaemonPollOptions & { retireLegacyImpl: () => Promise<void> },
 ): Promise<DaemonHealthStatus> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleepImpl = options.sleepImpl ?? defaultSleep;
@@ -129,11 +130,7 @@ export async function retireLegacyDaemon(
   const confirmed = await probeDaemonHealth(port, expected, fetchImpl);
   if (confirmed !== 'legacy') return confirmed;
 
-  try {
-    await fetchImpl(`http://127.0.0.1:${port}/shutdown`, { method: 'POST', redirect: 'manual' });
-  } catch {
-    // legacy daemon 可能在响应完成前已经退出；以后续 health 为准。
-  }
+  await options.retireLegacyImpl();
   for (let attempt = 0; attempt < pollAttempts; attempt++) {
     await sleepImpl(pollIntervalMs);
     const status = await probeDaemonHealth(port, expected, fetchImpl);
@@ -161,6 +158,7 @@ export async function ensureDaemonReady(
       fetchImpl,
       pollAttempts,
       pollIntervalMs,
+      retireLegacyImpl: options.retireLegacyImpl,
       sleepImpl,
     });
     if (status === 'current') return;

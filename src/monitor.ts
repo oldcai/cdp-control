@@ -15,6 +15,7 @@ import {
   ensureDaemonReady,
   type DaemonIdentity,
 } from './monitor-health.ts';
+import { retireLegacyDaemonProcess } from './monitor-process';
 
 export const LOGS_PORT = cdpLogsPort();
 
@@ -23,7 +24,7 @@ export function pidFilePath(): string {
 }
 
 async function spawnDaemon(): Promise<void> {
-  const script = process.argv[1] || __filename;
+  const script = daemonScriptPath();
   // 把当前浏览器端口(经 ensureBrowser 从 browser.json 同步的 PORT)注入 daemon,daemon 连对端口。
   const child = spawn(process.execPath, [script, '__daemon'], {
     detached: true,
@@ -31,6 +32,10 @@ async function spawnDaemon(): Promise<void> {
     env: { ...process.env, CDP_PORT: String(PORT) },
   });
   child.unref();
+}
+
+function daemonScriptPath(): string {
+  return process.argv[1] || __filename;
 }
 
 function currentDaemonIdentity(): DaemonIdentity {
@@ -52,6 +57,7 @@ export async function maybeSpawnDaemon(): Promise<void> {
 export async function ensureDaemon(port = LOGS_PORT): Promise<number> {
   await ensureDaemonReady(port, currentDaemonIdentity(), {
     fetchImpl: fetch,
+    retireLegacyImpl: () => retireLegacyDaemonProcess(port, daemonScriptPath()),
     sleepImpl: sleep,
     spawnImpl: spawnDaemon,
   });

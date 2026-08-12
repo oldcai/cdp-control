@@ -85,6 +85,9 @@ test('probeDaemonHealth: legacy 只认精确旧 schema 与非负整数 targets',
       ensureDaemonReady(19333, expected, {
         fetchImpl: fakeFetch,
         pollAttempts: 1,
+        retireLegacyImpl: async () => {
+          calls.push('retire');
+        },
         sleepImpl: async () => {
           calls.push('sleep');
         },
@@ -116,6 +119,9 @@ test('probeDaemonHealth: health redirect 是可达 foreign,不跟随到 legacy J
     ensureDaemonReady(19333, expected, {
       fetchImpl: fakeFetch,
       pollAttempts: 1,
+      retireLegacyImpl: async () => {
+        calls.push('retire');
+      },
       sleepImpl: async () => {
         calls.push('sleep');
       },
@@ -128,7 +134,7 @@ test('probeDaemonHealth: health redirect 是可达 foreign,不跟随到 legacy J
   assert.deepEqual(calls, ['GET /health redirect=manual', 'GET /health redirect=manual']);
 });
 
-test('ensureDaemonReady: legacy 先 shutdown 并等 health 消失,再 spawn 并等待 current', async () => {
+test('ensureDaemonReady: legacy 先退出已验证 PID 并等 health 消失,再 spawn 并等待 current', async () => {
   const expected = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9222);
   const calls: string[] = [];
   let phase: 'legacy' | 'stopping' | 'stopped' | 'starting' | 'current' = 'legacy';
@@ -136,11 +142,6 @@ test('ensureDaemonReady: legacy 先 shutdown 并等 health 消失,再 spawn 并�
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const method = init?.method ?? 'GET';
     calls.push(`${method} ${new URL(url).pathname} (${phase})`);
-    if (new URL(url).pathname === '/shutdown') {
-      assert.equal(phase, 'legacy');
-      phase = 'stopping';
-      return new Response('{}');
-    }
     if (phase === 'stopped') throw new TypeError('fetch failed');
     if (phase === 'current') {
       return new Response(JSON.stringify({ ok: true, identity: expected, targets: 0 }));
@@ -162,6 +163,11 @@ test('ensureDaemonReady: legacy 先 shutdown 并等 health 消失,再 spawn 并�
     fetchImpl: fakeFetch,
     pollAttempts: 2,
     pollIntervalMs: 25,
+    retireLegacyImpl: async () => {
+      calls.push(`signal verified legacy pid (${phase})`);
+      assert.equal(phase, 'legacy');
+      phase = 'stopping';
+    },
     sleepImpl: fakeSleep,
     spawnImpl: fakeSpawn,
   });
@@ -169,13 +175,51 @@ test('ensureDaemonReady: legacy 先 shutdown 并等 health 消失,再 spawn 并�
   assert.deepEqual(calls, [
     'GET /health (legacy)',
     'GET /health (legacy)',
-    'POST /shutdown (legacy)',
+    'signal verified legacy pid (legacy)',
     'sleep 25 (stopping)',
     'GET /health (stopped)',
     'spawn (stopped)',
     'sleep 25 (starting)',
     'GET /health (current)',
   ]);
+});
+
+test('ensureDaemonReady: legacy health 后端口换主时不向 foreign 发 destructive HTTP', async () => {
+  const expected = daemonIdentity({ CDP_HOME: join('tmp', 'monitor-home') }, join('fake', 'home'), '127.0.0.1', 9222);
+  const foreign = daemonIdentity({ CDP_HOME: join('tmp', 'foreign-home') }, join('fake', 'home'), '127.0.0.1', 9222);
+  const calls: string[] = [];
+  let phase: 'legacy' | 'foreign' = 'legacy';
+  let healthGets = 0;
+  const fakeFetch: typeof fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const method = init?.method ?? 'GET';
+    calls.push(`${method} ${new URL(url).pathname} (${phase})`);
+    if (method !== 'GET') return new Response('{}');
+    if (phase === 'foreign') return new Response(JSON.stringify({ ok: true, identity: foreign, targets: 0 }));
+    healthGets++;
+    const response = new Response(JSON.stringify({ ok: true, targets: 1 }));
+    if (healthGets === 2) phase = 'foreign';
+    return response;
+  };
+
+  await assert.rejects(
+    ensureDaemonReady(19333, expected, {
+      fetchImpl: fakeFetch,
+      pollAttempts: 1,
+      pollIntervalMs: 1,
+      retireLegacyImpl: async () => {
+        calls.push(`verify legacy pid (${phase})`);
+        throw new Error('legacy listener PID mismatch');
+      },
+      sleepImpl: async () => {
+        calls.push('sleep');
+      },
+      spawnImpl: async () => {
+        calls.push('spawn');
+      },
+    }),
+  );
+  assert.deepEqual(calls, ['GET /health (legacy)', 'GET /health (legacy)', 'verify legacy pid (foreign)']);
 });
 
 test('ensureDaemonReady: foreign identity 立即拒绝,绝不 shutdown 或 spawn', async () => {
@@ -192,6 +236,9 @@ test('ensureDaemonReady: foreign identity 立即拒绝,绝不 shutdown 或 spawn
     ensureDaemonReady(19333, expected, {
       fetchImpl: fakeFetch,
       pollAttempts: 1,
+      retireLegacyImpl: async () => {
+        calls.push('retire');
+      },
       sleepImpl: async () => {
         calls.push('sleep');
       },

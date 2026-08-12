@@ -52,9 +52,10 @@ logs 命令: 幂等注入(MONITOR_JS)+ 读取 window.__cdpLogs 并结构化序�
 - `sync()`:每 500ms 轮询 `/json/list`,对未 attach 的 tab 注入(覆盖手动新开)。WS 断开 → 移除,下轮重连重注册。
 - HTTP:仅 `/health`(存活探测)+ `/shutdown`。`/health` 返回 daemon identity
   (`CDP_HOME` + CDP host/port),PID 存当前 `CDP_HOME/cdp-listen.pid`,不与其它 home 共享状态。
-- 兼容升级:只把精确旧 schema `{ok:true,targets:<非负整数>}`(无 identity/无额外字段) 视为旧版,二次确认后只对它
-  `POST /shutdown`,等 health 不可达再启动新 daemon；带 identity 但不匹配的 foreign daemon 一律拒绝,
-  绝不会被 shutdown。
+- 兼容升级:只把精确旧 schema `{ok:true,targets:<非负整数>}`(无 identity/无额外字段) 视为旧版。退出时必须
+  同时验证旧 tmp PID file、目标 loopback listener 的唯一 PID 和当前 CLI `__daemon` 命令行，然后对该 PID
+  发信号，等 health 不可达再启动新 daemon。不向端口发 destructive HTTP；带 identity 但不匹配的
+  foreign daemon 一律拒绝。
 
 ### `logs` 命令 / `cdp.logs` API
 - `maybeSpawnDaemon()` 确保 daemon 在跑(持续守护注入)。
