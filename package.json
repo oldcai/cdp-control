@@ -8,7 +8,7 @@
   },
   "files": ["dist", "rules", "skills"],
   "engines": {
-    "node": ">=21"
+    "node": ">=22.6.0"
   },
   "scripts": {
     "build": "node build.mjs",
