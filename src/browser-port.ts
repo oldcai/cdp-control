@@ -266,7 +266,14 @@ export type ListenerCleanupPlan = { action: 'kill'; pids: number[] } | { action:
 
 type ListenerReclaimDependencies = Pick<
   FixedPortDependencies,
-  'assertAuthority' | 'assertAddressSet' | 'killPid' | 'portState' | 'sleep' | 'releaseTimeoutMs' | 'releasePollMs'
+  | 'assertAuthority'
+  | 'assertAddressSet'
+  | 'listenerPids'
+  | 'killPid'
+  | 'portState'
+  | 'sleep'
+  | 'releaseTimeoutMs'
+  | 'releasePollMs'
 >;
 
 /** 对全部 listener 做 best-effort 回收；单个失败不阻断其余 PID，并保留每个真因。 */
@@ -347,9 +354,13 @@ export async function reclaimFixedPortListeners(
   pids: number[],
   deps: ListenerReclaimDependencies,
 ): Promise<ListenerReclaimResult> {
-  const guard = async (): Promise<void> => {
+  const guard = async (pid: number): Promise<void> => {
     assertAuthority(port, deps);
     await assertAddressSet(deps);
+    const live = await listenerSnapshot(port, deps);
+    if (!live.includes(pid)) {
+      throw new FixedPortError(`配置端口 ${port} 的监听进程 ${pid} 已不再归属该端点，拒绝结束可能被复用的 PID`);
+    }
   };
   const killFailures = await killListenerPids(pids, deps.killPid, guard);
   assertAuthority(port, deps);
@@ -489,7 +500,7 @@ async function recheckBeforeLaunch(
   return prepareFixedPortAttempt(port, deps, restartCount + 1, true);
 }
 
-async function listenerSnapshot(port: number, deps: FixedPortDependencies): Promise<number[]> {
+async function listenerSnapshot(port: number, deps: Pick<FixedPortDependencies, 'listenerPids'>): Promise<number[]> {
   try {
     return normalizePids(await deps.listenerPids(port));
   } catch (cause) {

@@ -486,6 +486,7 @@ test('reclaimFixedPortListeners: 权威配置已变化时在首个 kill 前 fail
         assertAuthority: () => {
           throw authorityChanged;
         },
+        listenerPids: async () => [931, 932],
         killPid: pid => killed.push(pid),
         portState: async () => ({ state: 'free' }),
         sleep: async () => {},
@@ -521,6 +522,23 @@ test('prepareFixedPort: 破坏性门禁的 DNS 地址集合变化时 fail closed
   assert.deepEqual(killed, []);
 });
 
+test('reclaimFixedPortListeners: 杀前复确认 PID 仍是当前 listener，已退出或换代则 fail closed 不杀', async () => {
+  const killed: number[] = [];
+  await assert.rejects(
+    () =>
+      reclaimFixedPortListeners(9222, [961, 962], {
+        listenerPids: async () => [961],
+        killPid: pid => {
+          killed.push(pid);
+        },
+        portState: async () => ({ state: 'busy' }),
+        sleep: async () => undefined,
+      }),
+    error => error instanceof FixedPortError && /监听进程 962 已不再归属/.test(error.message),
+  );
+  assert.deepEqual(killed, [961]);
+});
+
 test('reclaimFixedPortListeners: 每个 PID 前复核 DNS 地址集合，变化后不再 kill 后续 listener', async () => {
   const dnsChanged = new Error('DNS address set changed between PIDs fixture');
   const killed: number[] = [];
@@ -532,6 +550,7 @@ test('reclaimFixedPortListeners: 每个 PID 前复核 DNS 地址集合，变化�
         assertAddressSet: () => {
           if (addressSetChanged) throw dnsChanged;
         },
+        listenerPids: async () => [951, 952],
         killPid: pid => {
           killed.push(pid);
           addressSetChanged = true;
@@ -579,7 +598,8 @@ function dependencies(
     },
     listenerPids: async port => {
       calls.push(`listeners:${port}`);
-      return listeners.shift() ?? [];
+      if (listeners.length > 1) return listeners.shift()!;
+      return listeners[0] ?? [];
     },
     killPid: pid => {
       calls.push(`kill:${pid}`);
@@ -762,7 +782,9 @@ test('prepareFixedPort: 忙且非健康时 kill 全部去重 listener，确认�
     'listeners:24103',
     'probe:24103',
     'listeners:24103',
+    'listeners:24103',
     'kill:502',
+    'listeners:24103',
     'kill:501',
     'state:24103',
   ]);
@@ -917,7 +939,7 @@ test('prepareFixedPort: 任一 kill 抛错则保留真因并停止', async () =>
     killError: new Error('EPERM fixture'),
   });
   await assert.rejects(() => prepareFixedPort(24107, d), /EPERM fixture/);
-  assert.deepEqual(d.calls.slice(0, 11), [
+  assert.deepEqual(d.calls.slice(0, 13), [
     'probe:24107',
     'state:24107',
     'listeners:24107',
@@ -925,8 +947,10 @@ test('prepareFixedPort: 任一 kill 抛错则保留真因并停止', async () =>
     'state:24107',
     'listeners:24107',
     'probe:24107',
+    'listeners:24107',
     'listeners:24107',
     'kill:701',
+    'listeners:24107',
     'kill:702',
     'state:24107',
   ]);
@@ -955,6 +979,7 @@ test('prepareFixedPort: 某个 kill 失败仍尝试其余 listener，并复查�
 test('reclaimFixedPortListeners: 早期 kill 失败仍尝试全部 PID，并同时报告最终端口状态和失败', async () => {
   const calls: string[] = [];
   const result = await reclaimFixedPortListeners(24122, [721, 722], {
+    listenerPids: async () => [721, 722],
     killPid: pid => {
       calls.push(`kill:${pid}`);
       if (pid === 721) throw new Error('EPERM 721');
@@ -988,6 +1013,7 @@ test('prepareFixedPort: kill 后端口超时未释放则失败，绝不谎报可
     'state:24108',
     'listeners:24108',
     'probe:24108',
+    'listeners:24108',
     'listeners:24108',
     'kill:801',
     'state:24108',
