@@ -1,7 +1,7 @@
 // browser-config.test.ts — browser.json 解析 + defaultArgs 单测(纯函数)。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrowserConfig, defaultArgs, browserConfigPath, DEFAULT_PORT, DEFAULT_USER_DATA } from '../src/browser-config.ts';
+import { parseBrowserConfig, defaultArgs, browserConfigPath, effectiveBrowserPort, DEFAULT_PORT, DEFAULT_USER_DATA } from '../src/browser-config.ts';
 
 test('parseBrowserConfig: 合法 JSON 解析(含 port/userData)', () => {
   const c = parseBrowserConfig('{ "exe": "/x/msedge.exe", "kind": "edge", "args": ["--no-first-run"], "port": 9333, "userData": "/data" }');
@@ -49,4 +49,9 @@ test('defaultArgs: 通用集 + linux 加 disable-dev-shm-usage', () => {
 
 test('browserConfigPath: 落在 ~/.cdp-control/browser.json', () => {
   assert.match(browserConfigPath(), /\.cdp-control[\\/]browser\.json$/);
+});
+
+test('effectiveBrowserPort: 配置端口权威；无配置固定 9222，不受 CDP_PORT 漂移', () => {
+  assert.equal(effectiveBrowserPort({ port: 24444 }), 24444);
+  assert.equal(effectiveBrowserPort(null), DEFAULT_PORT);
 });
