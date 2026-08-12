@@ -11,9 +11,9 @@ export interface AttachmentRegistryDependencies<Target, Attachment extends Closa
 }
 
 export class AttachmentRegistry<Target, Attachment extends ClosableAttachment<CloseEvent>, CloseEvent = unknown> {
-  readonly #attached = new Map<string, Attachment>();
-  readonly #attaching = new Set<string>();
-  readonly #dependencies: AttachmentRegistryDependencies<Target, Attachment, CloseEvent>;
+  #attached = new Map<string, Attachment>();
+  #attaching = new Set<string>();
+  #dependencies: AttachmentRegistryDependencies<Target, Attachment, CloseEvent>;
   #batch: Promise<void> | null = null;
   #cursor = 0;
 
