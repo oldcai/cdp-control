@@ -25,6 +25,58 @@ export function lsofListenerArgs(port: number): string[] {
   return ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpnt'];
 }
 
+export interface CdpReadyWaitDependencies {
+  probe(timeoutMs: number): Promise<boolean>;
+  exitReason(): string | null;
+  sleep(ms: number): Promise<void>;
+  now(): number;
+}
+
+/**
+ * 等待固定端口上的 CDP 就绪。子进程早退后仍给并发启动者一段有界复探窗口；窗口结束
+ * 仍未就绪才抛原始退出原因，避免 Chrome 单例竞态被误报为启动失败。
+ */
+export async function waitForCdpReady(
+  deps: CdpReadyWaitDependencies,
+  timeoutMs = 20_000,
+  earlyExitGraceMs = 3_000,
+  pollMs = 400,
+): Promise<void> {
+  const overallDeadline = deps.now() + timeoutMs;
+  let exitDeadline: number | null = null;
+  let rememberedExit: string | null = null;
+
+  while (true) {
+    const now = deps.now();
+    const exit = deps.exitReason();
+    if (exit && exitDeadline === null) {
+      rememberedExit = exit;
+      exitDeadline = Math.min(overallDeadline, now + earlyExitGraceMs);
+    }
+    const activeDeadline = exitDeadline ?? overallDeadline;
+    const remaining = activeDeadline - now;
+    if (remaining <= 0) break;
+
+    let ready = false;
+    try { ready = await deps.probe(Math.min(1_000, remaining)); } catch {}
+    if (ready) return;
+
+    const exitAfterProbe = deps.exitReason();
+    if (exitAfterProbe && exitDeadline === null) {
+      rememberedExit = exitAfterProbe;
+      exitDeadline = Math.min(overallDeadline, deps.now() + earlyExitGraceMs);
+    }
+    const nextDeadline = exitDeadline ?? overallDeadline;
+    const pause = Math.min(pollMs, nextDeadline - deps.now());
+    if (pause <= 0) break;
+    await deps.sleep(pause);
+  }
+
+  const exit = deps.exitReason() ?? rememberedExit;
+  if (exit) throw new Error(exit);
+  throw new Error('浏览器启动超时');
+}
+
 export interface FixedPortDependencies {
   probe(port: number): Promise<ProbeResult>;
   /** 忙端口进入破坏性流程前的有界就绪宽限；运行时用于等待并发冷启动。 */

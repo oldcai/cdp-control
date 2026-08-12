@@ -14,6 +14,7 @@ import {
   FixedPortError,
   hasCdpWebSocket,
   lsofListenerArgs,
+  waitForCdpReady,
 } from '../src/browser-port.ts';
 
 test('hasCdpWebSocket: 只接受非空 ws/wss URL，普通 truthy 值不算健康 CDP', () => {
@@ -26,6 +27,30 @@ test('hasCdpWebSocket: 只接受非空 ws/wss URL，普通 truthy 值不算健�
 
 test('lsofListenerArgs: POSIX 枚举只请求精确 TCP LISTEN，不会收客户端连接或 UDP', () => {
   assert.deepEqual(lsofListenerArgs(9222), ['-nP', '-iTCP:9222', '-sTCP:LISTEN', '-Fpnt']);
+});
+
+test('waitForCdpReady: 子进程早退后仍有界复探，并复用并发启动成功的 CDP', async () => {
+  let now = 0;
+  let probes = 0;
+  await waitForCdpReady({
+    probe: async () => ++probes === 3,
+    exitReason: () => 'fixture child exited(code=0)',
+    sleep: async ms => { now += ms; },
+    now: () => now,
+  }, 20_000, 3_000, 1_000);
+  assert.equal(probes, 3);
+  assert.equal(now, 2_000);
+});
+
+test('waitForCdpReady: 早退宽限结束仍无健康 CDP 时保留真实退出原因', async () => {
+  let now = 0;
+  await assert.rejects(() => waitForCdpReady({
+    probe: async () => false,
+    exitReason: () => 'fixture child exited(code=7)',
+    sleep: async ms => { now += ms; },
+    now: () => now,
+  }, 20_000, 3_000, 1_000), /code=7/);
+  assert.equal(now, 3_000);
 });
 
 function dependencies(options: {

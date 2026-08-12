@@ -20,6 +20,7 @@ import {
   lsofListenerArgs,
   parseNetstatListeners,
   parseLsofListeners,
+  waitForCdpReady,
   type PortState,
 } from './browser-port';
 
@@ -70,15 +71,18 @@ async function waitReady(timeoutMs = 20000, launched: ReturnType<typeof spawn> |
   if (launched && (launched.exitCode !== null || launched.signalCode !== null)) {
     onExit(launched.exitCode, launched.signalCode);
   }
-  const t0 = Date.now();
   try {
-    while (Date.now() - t0 < timeoutMs) {
-      if (earlyExit) throw new Error(earlyExit);
-      try { const v: unknown = await getJson('/json/version'); if (hasCdpWebSocket(v)) return; } catch {}
-      await new Promise(r => setTimeout(r, 400));
-    }
-    if (earlyExit) throw new Error(earlyExit);
-    throw new Error('浏览器启动超时');
+    await waitForCdpReady({
+      probe: async probeTimeoutMs => {
+        try {
+          const value: unknown = await getJson('/json/version', probeTimeoutMs);
+          return hasCdpWebSocket(value);
+        } catch { return false; }
+      },
+      exitReason: () => earlyExit,
+      sleep,
+      now: Date.now,
+    }, timeoutMs);
   } finally {
     launched?.off('exit', onExit);
   }
