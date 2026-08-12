@@ -8,7 +8,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultRootDir = resolve(scriptDir, '..');
 
 export const DEFAULT_NODE_LAYERS = Object.freeze([
-  { name: 'paths', files: ['src/paths.ts'] },
+  { name: 'paths', files: ['src/paths.ts', 'src/monitor-health.ts'] },
   {
     name: 'primitives',
     files: [

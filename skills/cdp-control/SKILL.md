@@ -143,7 +143,7 @@ cdp-control run "./scripts/你的脚本.js"
 | `logs [--level error,warn] [--since <ms>] [--json]` | 读控制台日志 |
 | `run <脚本文件>` | 执行自动化脚本(全局 `cdp` API,可顶层 await;**返回非 undefined 则打印**) |
 
-环境变量:`CDP_HOME`(整体覆盖 `browser.json`/`user-data`/`rules`,默认 `~/.cdp-control`)、`CDP_HOST`/`CDP_PORT`(默认 `127.0.0.1:9222`)、`CDP_NO_AUTOSTART=1`(端点不就绪时只报错、不冷启动)、`CDP_LOGS_PORT`(daemon,默认 9333)、`CDP_RULES_DIR`(实时规则目录的更高优先级覆盖)、`CDP_FOLD_FILE`/`CDP_IGNORE_LINKS_FILE`(单文件路径覆盖,测试用)。
+环境变量:`CDP_HOME`(整体覆盖 `browser.json`/`user-data`/`rules` 和 monitor daemon 身份/PID,默认 `~/.cdp-control`)、`CDP_HOST`/`CDP_PORT`(默认 `127.0.0.1:9222`)、`CDP_NO_AUTOSTART=1`(端点不就绪时只报错、不冷启动)、`CDP_LOGS_PORT`(daemon 显式端口;默认 home 用 9333,自定义 `CDP_HOME` 稳定派生隔离端口)、`CDP_RULES_DIR`(实时规则目录的更高优先级覆盖)、`CDP_FOLD_FILE`/`CDP_IGNORE_LINKS_FILE`(单文件路径覆盖,测试用)。
 
 **recipe 编写**:`rules/recipes/<site>.js`(作者代码直接住 git,单一来源)一文件一站点,导出**规则数组** `module.exports = [{ name, scope: '<hostname+pathname glob>', async extract(cdp, ctx) { … return { lines: [文本行(可内嵌 [ref=N])] }; } }, …]`。`scope` 可为字符串或数组(一抽取服务多 URL 形态);同文件多元素=同站点多布局。`extract` 内可用完整 `cdp` api(`cdp.view` 拿树与 ref、`cdp.article` 取正文、`cdp.read` 展开再读、`cdp.eval` 按站点 selector 抓结构)。**三个引擎原语替你接管可复用/易错部分**:
 - **只读探针 `window.__cdpProbe`**(view 建树后自动注入):eval 里 `const { refOf, text } = window.__cdpProbe`,`refOf(el)` 反查已建树 ref(未命中 `null`,绝不按需注册)。不再手抄 refOf 样板。
@@ -170,7 +170,7 @@ cdp click 36 --target "BV1..."                    # 点赞;反馈回文本变化
 
 - **自动装**:`open`/`list`/`logs` 自动拉起 daemon,轮询给每个 tab 注册监控;`logs` 本身幂等补种。
 - **读**:`logs [--target <匹配>] [--level error,warn] [--since <ms>] [--json]`。`--level` 逗号分隔(debug/log/info/warn/error);未捕获异常归 `error`。默认人类可读 `[HH:MM:SS][level] args`;`--json` 完整结构(嵌套对象+`stack`)。
-- **脚本**:`cdp.logs(target, {level, since})` → 结构化日志数组,配合 `waitForFn` 做"跑完断言无报错"。端口 `CDP_LOGS_PORT`(默认 9333),浏览器关闭后 daemon 约 5s 自动退出。
+- **脚本**:`cdp.logs(target, {level, since})` → 结构化日志数组,配合 `waitForFn` 做"跑完断言无报错"。默认 home 的 daemon 端口为 9333;自定义 `CDP_HOME` 自动稳定派生隔离端口,也可用 `CDP_LOGS_PORT` 显式指定。浏览器关闭后 daemon 约 5s 自动退出。
 
 **限制**:刷新后 `__cdpLogs` 清空(监控补装但历史没了);首屏/加载早期日志可能错过;刚 `open` 的新 tab 需 ~0.5–2s 才装监控,立即读会空——**先 `await sleep(1500)` 再操作/读**。
 

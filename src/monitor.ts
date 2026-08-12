@@ -3,18 +3,22 @@
  * 依赖 transport(连接原语)+ inject-loader(monitor/read 注入装配),不依赖 api → 无环。
  */
 import { spawn } from 'node:child_process';
-import { unlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { pageWs, send, listTargets, resolve, evaluate, sleep, PORT, Target } from './transport';
+import { pageWs, send, listTargets, resolve, evaluate, sleep, PORT, HOST, Target } from './transport';
 import { inject, readExpr } from './inject-loader';
-import { cdpNoAutostart } from './paths.ts';
+import { cdpHome, cdpLogsPort, cdpNoAutostart } from './paths.ts';
+import {
+  daemonHealthy as probeDaemonHealth,
+  daemonIdentity,
+  daemonPidFilePath,
+  type DaemonIdentity,
+} from './monitor-health.ts';
 
-export const LOGS_PORT = Number(process.env.CDP_LOGS_PORT) || 9333;
+export const LOGS_PORT = cdpLogsPort();
 
 export function pidFilePath(): string {
-  return join(tmpdir(), 'cdp-listen.pid');
+  return daemonPidFilePath();
 }
 
 async function spawnDaemon(): Promise<void> {
@@ -28,13 +32,12 @@ async function spawnDaemon(): Promise<void> {
   child.unref();
 }
 
+function currentDaemonIdentity(): DaemonIdentity {
+  return daemonIdentity(process.env, undefined, HOST, PORT);
+}
+
 export async function daemonHealthy(port = LOGS_PORT): Promise<boolean> {
-  try {
-    const r = await fetch(`http://127.0.0.1:${port}/health`);
-    return r.ok;
-  } catch {
-    return false;
-  }
+  return probeDaemonHealth(port, currentDaemonIdentity());
 }
 
 // 异步确保 daemon 在跑(打开页面时自动注入守护;失败不阻塞主流程)。
@@ -75,6 +78,7 @@ async function attachInject(ws: WebSocket): Promise<void> {
  */
 export async function cmdListen(): Promise<never> {
   const attached = new Map<string, WebSocket>();
+  const identity = currentDaemonIdentity();
 
   async function injectMon(target: Target): Promise<void> {
     let ws: WebSocket;
@@ -116,7 +120,7 @@ export async function cmdListen(): Promise<never> {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${LOGS_PORT}`);
     res.setHeader('content-type', 'application/json; charset=utf-8');
     if (url.pathname === '/health') {
-      res.end(JSON.stringify({ ok: true, targets: attached.size }));
+      res.end(JSON.stringify({ ok: true, identity, targets: attached.size }));
       return;
     }
     if (url.pathname === '/shutdown') {
@@ -138,6 +142,7 @@ export async function cmdListen(): Promise<never> {
   setInterval(() => {
     sync().catch(() => {});
   }, 500);
+  mkdirSync(cdpHome(), { recursive: true });
   writeFileSync(pidFilePath(), String(process.pid));
   process.on('SIGINT', () => process.exit(0));
   process.on('SIGTERM', () => process.exit(0));
