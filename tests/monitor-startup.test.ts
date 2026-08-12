@@ -13,6 +13,9 @@ test('initializeBoundDaemon: bind 成功后先发布 PID，再进入可能很慢
     publishPid: () => {
       calls.push('pid published');
     },
+    rollbackBind: async () => {
+      calls.push('listener closed');
+    },
     syncInitialTargets: async () => {
       calls.push('sync started');
       assert.deepEqual(calls, ['bound', 'pid published', 'sync started']);
@@ -20,4 +23,30 @@ test('initializeBoundDaemon: bind 成功后先发布 PID，再进入可能很慢
   });
 
   assert.deepEqual(calls, ['bound', 'pid published', 'sync started']);
+});
+
+test('initializeBoundDaemon: PID 发布失败会关闭已绑定 listener，保留原错误且不进入 sync', async () => {
+  const calls: string[] = [];
+  const publishError = new Error('read-only CDP_HOME');
+
+  await assert.rejects(
+    initializeBoundDaemon({
+      bind: async () => {
+        calls.push('bound');
+      },
+      publishPid: () => {
+        calls.push('publish failed');
+        throw publishError;
+      },
+      rollbackBind: async () => {
+        calls.push('listener closed');
+      },
+      syncInitialTargets: async () => {
+        calls.push('sync started');
+      },
+    }),
+    error => error === publishError,
+  );
+
+  assert.deepEqual(calls, ['bound', 'publish failed', 'listener closed']);
 });

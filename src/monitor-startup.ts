@@ -2,11 +2,19 @@
 export interface BoundDaemonStartup {
   bind(): Promise<void>;
   publishPid(): void;
+  rollbackBind(): Promise<void>;
   syncInitialTargets(): Promise<void>;
 }
 
 export async function initializeBoundDaemon(startup: BoundDaemonStartup): Promise<void> {
   await startup.bind();
-  startup.publishPid();
+  try {
+    startup.publishPid();
+  } catch (cause) {
+    try {
+      await startup.rollbackBind();
+    } catch {}
+    throw cause;
+  }
   await startup.syncInitialTargets();
 }

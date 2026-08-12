@@ -151,6 +151,10 @@ export async function cmdListen(): Promise<never> {
       mkdirSync(cdpHome(), { recursive: true });
       writeFileSync(pidFilePath(), String(process.pid));
     },
+    rollbackBind: () =>
+      new Promise<void>(resolve => {
+        server.close(() => resolve());
+      }),
     syncInitialTargets: sync,
   });
   setInterval(() => {
