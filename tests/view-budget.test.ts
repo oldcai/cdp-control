@@ -206,6 +206,23 @@ test('renderFocusedBudgetedView: 折叠摘要更长的琐碎区域保持原样',
   assert.ok(result.lines.some(line => line.includes('焦点正文')));
 });
 
+test('renderFocusedBudgetedView: 合并文本末段 ref 不能冒充整段焦点', () => {
+  const merged = mk({
+    tag: 'span',
+    isContent: true,
+    text: 'A'.repeat(600) + 'link' + 'B'.repeat(600),
+    ref: 7,
+    budgetRef: 7,
+    budgetFoldable: false,
+  });
+  const root = prepare(mk({ tag: 'body', kids: [merged], size: 2 }));
+
+  assert.throws(
+    () => renderFocusedBudgetedView(root, 200, 7),
+    /focus ref=7 只代表合并文本的末段元素，不能作为独立焦点/,
+  );
+});
+
 test('renderFocusedBudgetedView: 焦点外的短节点不应被更长摘要反向膨胀', () => {
   const chips = Array.from({ length: 150 }, (_, index) => mk({
     tag: 'a', isContent: true, inter: true, text: `标签${index}`,
