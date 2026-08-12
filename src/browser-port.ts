@@ -308,7 +308,7 @@ export async function planListenerCleanup(
   await assertAddressSet(deps);
   const initialState = await deps.portState(port);
   assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await confirmFixedPortDecision(port, deps);
   if (initialState.state === 'free') return { action: 'noProcess' };
   if (initialState.state === 'unknown') return { action: 'stillUp' };
 
@@ -317,12 +317,12 @@ export async function planListenerCleanup(
   await assertAddressSet(deps);
   const finalState = await deps.portState(port);
   assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await confirmFixedPortDecision(port, deps);
   if (finalState.state === 'free') return { action: 'noProcess' };
   if (finalState.state === 'unknown') return { action: 'stillUp' };
   const finalPids = normalizePids(await deps.listenerPids(port));
   assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await confirmFixedPortDecision(port, deps);
   if (!firstPids.length || !samePids(firstPids, finalPids)) return { action: 'stillUp' };
   return { action: 'kill', pids: finalPids };
 }
@@ -388,7 +388,7 @@ export async function reclaimFixedPortListeners(
     await assertAddressSet(deps);
     const release = await deps.portState(port);
     assertAuthority(port, deps);
-    await assertAddressSet(deps);
+    await confirmFixedPortDecision(port, deps);
     if (release.state !== 'busy') return { ...release, killFailures };
     if (i < attempts) {
       await deps.sleep(pollMs);
