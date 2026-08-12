@@ -81,6 +81,26 @@ export async function resolveSocketHosts(host: string, lookupAll: LookupAll): Pr
   return hosts;
 }
 
+export function sameResolvedHosts(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every(host => rightSet.has(host));
+}
+
+/** 破坏性尝试期间固定 DNS 快照；集合变化则 fail closed，避免在另一组地址上误杀。 */
+export async function pinResolvedHosts(
+  expected: readonly string[] | null,
+  resolve: () => Promise<string[]>,
+): Promise<string[]> {
+  const current = await resolve();
+  if (expected && !sameResolvedHosts(expected, current)) {
+    throw new FixedPortError(
+      `CDP_HOST 解析地址已变化(${[...expected].join(', ')} -> ${current.join(', ')})，拒绝继续破坏性操作`,
+    );
+  }
+  return current;
+}
+
 export interface HostCdpProbeDependencies {
   /** 原始 CDP_HOST；只有它本身是数值地址时才允许跳过二次探活。 */
   originalHost?: string;
