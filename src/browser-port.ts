@@ -82,6 +82,8 @@ export async function resolveSocketHosts(host: string, lookupAll: LookupAll): Pr
 }
 
 export interface HostCdpProbeDependencies {
+  /** 原始 CDP_HOST；只有它本身是数值地址时才允许跳过二次探活。 */
+  originalHost?: string;
   primary(): Promise<ProbeResult>;
   resolveAddresses(): Promise<string[]>;
   address(host: string): Promise<ProbeResult>;
@@ -109,7 +111,7 @@ export async function probeHostCdp(deps: HostCdpProbeDependencies): Promise<Prob
     return { ready: false };
   }
 
-  if (primary.ready && addresses.length <= 1) {
+  if (primary.ready && addresses.length <= 1 && isIP(socketHost(deps.originalHost ?? '')) !== 0) {
     return addresses[0] ? { ...primary, address: addresses[0] } : primary;
   }
 

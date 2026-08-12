@@ -157,11 +157,12 @@ async function probeResolvedCdp(address: string, timeoutMs: number): Promise<Pro
 }
 
 /**
- * ready 探活：单一数值 host 健康时只做一次 GET。多地址 hostname 即使主请求成功
- * 也逐解析地址复核并 pin，避免后续请求/daemon 重新命中非 CDP 地址。
+ * ready 探活：原始 host 已是数值地址时只做一次 GET。所有 DNS hostname
+ * 都要验证返回的数值地址再 pin；无法归属则 fail closed。
  */
 async function probeReady(timeoutMs = 5000): Promise<ProbeResult> {
   const probe = await probeHostCdp({
+    originalHost: HOST,
     primary: async () => cdpProbeResult(await getJson('/json/version', timeoutMs)),
     resolveAddresses: resolvedSocketHosts,
     address: address => probeResolvedCdp(address, timeoutMs),
