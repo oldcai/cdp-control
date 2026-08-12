@@ -8,6 +8,8 @@
 
 `dist/` 不提交 git,改源码后重建:
 
+开发与 CI 的最低 Node.js 版本为 22.6.0(测试入口使用 `--experimental-strip-types`):
+
 ```bash
 npm install      # 首次:esbuild/typescript/@types/node/commander(运行时仅 commander)
 npm run build    # tsc --noEmit + esbuild(编译 + 打包注入脚本)
