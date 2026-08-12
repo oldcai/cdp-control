@@ -8,6 +8,7 @@ import {
   combineAddressStates,
   prepareFixedPort,
   probeHostCdp,
+  pinResolvedHosts,
   probePortAddresses,
   settleFixedPortLaunch,
   reclaimFixedPortListeners,
@@ -191,6 +192,23 @@ test('probeHostCdp: 主连接健康但多地址中仅后一个是 CDP 时必须 
     { ready: true, browser: 'Chrome/healthy-other-address', address: '2001:db8::44' },
   );
   assert.deepEqual(calls, ['primary', 'resolve', 'address:192.0.2.44', 'address:2001:db8::44']);
+});
+
+test('pinResolvedHosts: 首次解析记录快照，后续变化 fail closed', async () => {
+  const calls: string[][] = [];
+  const first = await pinResolvedHosts(null, async () => {
+    calls.push(['192.0.2.10', '2001:db8::10']);
+    return ['192.0.2.10', '2001:db8::10'];
+  });
+  assert.deepEqual(first, ['192.0.2.10', '2001:db8::10']);
+  assert.deepEqual(await pinResolvedHosts(first, async () => ['2001:db8::10', '192.0.2.10']), [
+    '2001:db8::10',
+    '192.0.2.10',
+  ]);
+  await assert.rejects(
+    () => pinResolvedHosts(first, async () => ['192.0.2.99']),
+    error => error instanceof FixedPortError && /解析地址已变化/.test(error.message),
+  );
 });
 
 test('probeHostCdp: 主连接健康却无法归属到任一解析地址时 fail closed', async () => {
