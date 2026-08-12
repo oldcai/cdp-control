@@ -1,0 +1,63 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
+  "files": {
+    "includes": [
+      "src/**/*.ts",
+      "tests/**/*.ts",
+      "*.mjs",
+      "scripts/**/*.mjs",
+      "*.json",
+      "sites/**/*.js",
+      "rules/recipes/*.js",
+      "!!dist",
+      "!!tmp",
+      "!!docs",
+      "!!**/*.md"
+    ],
+    "ignoreUnknown": true
+  },
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120,
+    "lineEnding": "lf"
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "arrowParentheses": "asNeeded"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noFallthroughSwitchClause": "error"
+      },
+      "correctness": {
+        "noUnusedFunctionParameters": "error",
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
+      },
+      "preset": "none"
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["rules/recipes/*.js"],
+      "formatter": {
+        "enabled": false
+      }
+    }
+  ],
+  "assist": {
+    "enabled": false
+  }
+}

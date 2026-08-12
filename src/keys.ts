@@ -8,23 +8,39 @@
 // (光发 keyDown/keyUp 事件到 JS 层不触发原生滚动)。CDP 合法 command:
 // scrollPageUp/scrollPageDown/scrollLineUp/scrollLineDown/scrollDocumentBegin/scrollDocumentEnd
 const KEYMAP: Record<string, { key: string; code: string; kc: number; commands?: string[] }> = {
-  enter: { key: 'Enter', code: 'Enter', kc: 13 }, tab: { key: 'Tab', code: 'Tab', kc: 9 },
-  escape: { key: 'Escape', code: 'Escape', kc: 27 }, backspace: { key: 'Backspace', code: 'Backspace', kc: 8 },
-  'delete': { key: 'Delete', code: 'Delete', kc: 46 },
-  arrowup: { key: 'ArrowUp', code: 'ArrowUp', kc: 38 }, arrowdown: { key: 'ArrowDown', code: 'ArrowDown', kc: 40 },
-  arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', kc: 37 }, arrowright: { key: 'ArrowRight', code: 'ArrowRight', kc: 39 },
+  enter: { key: 'Enter', code: 'Enter', kc: 13 },
+  tab: { key: 'Tab', code: 'Tab', kc: 9 },
+  escape: { key: 'Escape', code: 'Escape', kc: 27 },
+  backspace: { key: 'Backspace', code: 'Backspace', kc: 8 },
+  delete: { key: 'Delete', code: 'Delete', kc: 46 },
+  arrowup: { key: 'ArrowUp', code: 'ArrowUp', kc: 38 },
+  arrowdown: { key: 'ArrowDown', code: 'ArrowDown', kc: 40 },
+  arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', kc: 37 },
+  arrowright: { key: 'ArrowRight', code: 'ArrowRight', kc: 39 },
   home: { key: 'Home', code: 'Home', kc: 36, commands: ['scrollDocumentBegin'] },
   end: { key: 'End', code: 'End', kc: 35, commands: ['scrollDocumentEnd'] },
   pageup: { key: 'PageUp', code: 'PageUp', kc: 33, commands: ['scrollPageUp'] },
   pagedown: { key: 'PageDown', code: 'PageDown', kc: 34, commands: ['scrollPageDown'] },
-  space: { key: ' ', code: 'Space', kc: 32 }, f5: { key: 'F5', code: 'F5', kc: 116 },
+  space: { key: ' ', code: 'Space', kc: 32 },
+  f5: { key: 'F5', code: 'F5', kc: 116 },
 };
 
-export interface ParsedKey { key: string; code: string; kc: number; modifiers: number; commands?: string[] }
+export interface ParsedKey {
+  key: string;
+  code: string;
+  kc: number;
+  modifiers: number;
+  commands?: string[];
+}
 
 export function parseKeySpec(spec: string): ParsedKey {
-  const parts = String(spec).toLowerCase().split('+').map(s => s.trim()).filter(Boolean);
-  let modifiers = 0, main = '';
+  const parts = String(spec)
+    .toLowerCase()
+    .split('+')
+    .map(s => s.trim())
+    .filter(Boolean);
+  let modifiers = 0,
+    main = '';
   for (const p of parts) {
     if (p === 'ctrl' || p === 'control') modifiers |= 2;
     else if (p === 'shift') modifiers |= 8;
@@ -36,10 +52,13 @@ export function parseKeySpec(spec: string): ParsedKey {
   if (main.length === 1) {
     const up = main.toUpperCase();
     const kc = main === ' ' ? 32 : up.charCodeAt(0);
-    const code = main === ' ' ? 'Space' : /[0-9]/.test(main) ? 'Digit' + main : /[A-Z]/.test(up) ? 'Key' + up : 'Unknown';
+    const code =
+      main === ' ' ? 'Space' : /[0-9]/.test(main) ? 'Digit' + main : /[A-Z]/.test(up) ? 'Key' + up : 'Unknown';
     return { key: main === ' ' ? ' ' : up, code, kc, modifiers };
   }
   const m = KEYMAP[main];
   if (m) return { ...m, modifiers };
-  throw new Error(`未知按键: ${main}(支持 Ctrl/Shift/Alt 组合,如 Ctrl+Shift+A;功能键: Enter/Tab/Escape/Arrow/Home/F5 等)`);
+  throw new Error(
+    `未知按键: ${main}(支持 Ctrl/Shift/Alt 组合,如 Ctrl+Shift+A;功能键: Enter/Tab/Escape/Arrow/Home/F5 等)`,
+  );
 }

@@ -195,7 +195,7 @@ async function zhuanlanExtract(cdp, ctx) {
   try {
     const full = await cdp.read(target, { container: '.RichText' });
     md = full && full.markdown ? String(full.markdown).trim() : '';
-  } catch (e) { md = ''; }
+  } catch { md = ''; }
   if (md) {
     out.push('');
     for (const line of md.split('\n')) out.push(`   ${line}`);

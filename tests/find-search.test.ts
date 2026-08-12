@@ -15,12 +15,16 @@ import assert from 'node:assert/strict';
 import { searchByText, DEFAULT_MAX_VISIT } from '../src/inject/lib/find-search.ts';
 
 /** 伪节点:tag + 直接文本 + 子数组(可造环、可造深链)。 */
-interface N { tag: string; text?: string; kids?: N[] }
+interface N {
+  tag: string;
+  text?: string;
+  kids?: N[];
+}
 
 const ad = {
   getChildren: (n: N) => n.kids ?? [],
   getText: (n: N) => n.text ?? '',
-  isElement: (_n: N) => true,           // 测试里所有节点都视为元素
+  isElement: (_n: N) => true, // 测试里所有节点都视为元素
   tagOf: (n: N) => n.tag,
 };
 
@@ -36,9 +40,7 @@ test('深链命中:30+ 层 div 嵌套深处的 button 仍能命中(无硬深度�
 
 test('命中即止:命中元素的子树不再深入(避免父子重复占满结果)', () => {
   // 父 div 文本含"赞",子 button 文本也含"赞"——父命中后不深入子,故只 1 命中
-  const root: N = { tag: 'DIV', text: '点赞', kids: [
-    { tag: 'BUTTON', text: '点赞' },
-  ] };
+  const root: N = { tag: 'DIV', text: '点赞', kids: [{ tag: 'BUTTON', text: '点赞' }] };
   const hits = searchByText<N>(root, '赞', ad);
   assert.equal(hits.length, 1);
   assert.equal(hits[0].tag, 'DIV');
@@ -46,11 +48,14 @@ test('命中即止:命中元素的子树不再深入(避免父子重复占满结
 
 test('--all 收集多个命中(分散在不同子树,不互为父子)', () => {
   // 三个 button 分布在三个独立子树,各自命中
-  const root: N = { tag: 'DIV', kids: [
-    { tag: 'BUTTON', text: '赞同 1.4 万' },
-    { tag: 'DIV', kids: [{ tag: 'BUTTON', text: '赞同 7472' }] },
-    { tag: 'SECTION', kids: [{ tag: 'BUTTON', text: '赞同 583' }] },
-  ] };
+  const root: N = {
+    tag: 'DIV',
+    kids: [
+      { tag: 'BUTTON', text: '赞同 1.4 万' },
+      { tag: 'DIV', kids: [{ tag: 'BUTTON', text: '赞同 7472' }] },
+      { tag: 'SECTION', kids: [{ tag: 'BUTTON', text: '赞同 583' }] },
+    ],
+  };
   const hits = searchByText<N>(root, '赞同', ad);
   assert.equal(hits.length, 3);
   assert.ok(hits.every(h => h.tag === 'BUTTON'));
@@ -61,11 +66,14 @@ test('DROP 标签自身不匹配(子仍递归)', () => {
   // 真实 DOM 里 SCRIPT/STYLE 的 .children 为空(内容是 text node),这里造伪结构
   // 验证"DROP 标签自身不命中,即使文本含关键词"。
   const drop = new Set(['SCRIPT', 'STYLE']);
-  const root: N = { tag: 'BODY', kids: [
-    { tag: 'SCRIPT', text: 'var x = "赞同"' },
-    { tag: 'STYLE', text: '.a{content:"赞同"}' },
-    { tag: 'BUTTON', text: '赞同' },
-  ] };
+  const root: N = {
+    tag: 'BODY',
+    kids: [
+      { tag: 'SCRIPT', text: 'var x = "赞同"' },
+      { tag: 'STYLE', text: '.a{content:"赞同"}' },
+      { tag: 'BUTTON', text: '赞同' },
+    ],
+  };
   const hits = searchByText<N>(root, '赞同', ad, { dropTags: drop });
   // SCRIPT/STYLE 自身被 DROP 跳过,只剩顶层 BUTTON 命中
   assert.equal(hits.length, 1);
@@ -78,7 +86,7 @@ test('visited 防环:节点被环状引用时不无限递归', () => {
   const a: N = { tag: 'DIV', kids: [] };
   const b: N = { tag: 'SPAN', kids: [] };
   a.kids!.push(b);
-  b.kids!.push(a);          // 环
+  b.kids!.push(a); // 环
   a.kids!.push({ tag: 'BUTTON', text: '赞同' }); // 环外挂一个命中
   const hits = searchByText<N>(a, '赞同', ad);
   // 不挂(visited 拦下环的二次进入),且最终命中那个环外的 BUTTON

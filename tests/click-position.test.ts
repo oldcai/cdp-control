@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { centerInViewport, matchesClickTarget } from '../src/inject/lib/click-position.ts';
 
 test('centerInViewport: 返回元素矩形中心的 CSS 视口坐标', () => {
-  assert.deepEqual(
-    centerInViewport({ x: -20, y: 10, width: 50, height: 20 }, { width: 100, height: 80 }),
-    { x: 5, y: 20 },
-  );
+  assert.deepEqual(centerInViewport({ x: -20, y: 10, width: 50, height: 20 }, { width: 100, height: 80 }), {
+    x: 5,
+    y: 20,
+  });
 });
 
 test('centerInViewport: 零尺寸或中心在视口外时返回 null', () => {
@@ -29,5 +29,8 @@ test('matchesClickTarget: 逐层 shadow 命中链可组合判定包含关系', (
 });
 
 test('matchesClickTarget: 命中无关 overlay 时拒绝点击', () => {
-  assert.equal(matchesClickTarget('target', ['overlay'], () => false), false);
+  assert.equal(
+    matchesClickTarget('target', ['overlay'], () => false),
+    false,
+  );
 });

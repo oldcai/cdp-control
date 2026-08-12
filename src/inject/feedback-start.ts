@@ -6,4 +6,7 @@
 import { setResult } from './lib/result';
 import { startFeedback } from './lib/feedback';
 
-(() => { startFeedback(); return setResult({ ok: true }); })();
+(() => {
+  startFeedback();
+  return setResult({ ok: true });
+})();

@@ -10,13 +10,15 @@
  */
 export const BUILTIN_ALLOW = new Set(['os', 'path', 'fs', 'child_process', 'crypto', 'util', 'stream', 'url']);
 
-export function safeRequire(id: string): any {
+export function safeRequire(id: string): unknown {
   if (BUILTIN_ALLOW.has(id)) return require(id);
   throw new Error(`脚本不可 require '${id}',仅允许 Node 内建: ${[...BUILTIN_ALLOW].join('/')}`);
 }
 
 /** 执行一段 async 脚本体(顶层 await),返回其完成值。脚本内可拿全局 `cdp` 与受白名单限制的 `require`。 */
-export async function runScript(code: string, api: any): Promise<any> {
-  const fn = new Function('cdp', 'require', `return (async () => {\n${code}\n})();`);
+export async function runScript(code: string, api: unknown): Promise<unknown> {
+  const compiled: unknown = new Function('cdp', 'require', `return (async () => {\n${code}\n})();`);
+  if (typeof compiled !== 'function') throw new Error('脚本编译结果不可执行');
+  const fn = compiled as (cdp: unknown, requireBuiltin: typeof safeRequire) => Promise<unknown>;
   return await fn(api, safeRequire);
 }

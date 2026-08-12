@@ -21,7 +21,8 @@ declare const __CDP_ARG__: LocateArgs;
   const base = refElement(__CDP_ARG__.ref);
   if (!base) return setResult(notFoundResult({ ref: __CDP_ARG__.ref } as OperableArg));
   const el = climbAncestors(base, __CDP_ARG__.ancestor || 0);
-  if (!el) return setResult({ ok: false, err: `ref=${__CDP_ARG__.ref} 向上爬 ${__CDP_ARG__.ancestor || 0} 层后无元素` });
+  if (!el)
+    return setResult({ ok: false, err: `ref=${__CDP_ARG__.ref} 向上爬 ${__CDP_ARG__.ancestor || 0} 层后无元素` });
   // 用元素**自身直接文本**(只取直接子文本节点),不混入子树文本(避免按钮显示子树里作者名等误导)。
   const text = ownElText(el).slice(0, 80);
   const shadow = inShadow(el);

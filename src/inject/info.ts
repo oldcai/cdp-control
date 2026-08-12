@@ -23,8 +23,13 @@ const MAX_CLASS_LEN = 80;
 
 /** 提取一层的紧凑描述(纯 DOM 读,无副作用)。 */
 type ElementDescription = {
-  tag: string; id?: string; classes?: string[] | string; dataAttrs?: Record<string, string>;
-  aria?: string; role?: string; title?: string;
+  tag: string;
+  id?: string;
+  classes?: string[] | string;
+  dataAttrs?: Record<string, string>;
+  aria?: string;
+  role?: string;
+  title?: string;
 };
 
 function describe(el: Element): ElementDescription {
@@ -63,7 +68,8 @@ function describe(el: Element): ElementDescription {
   const base = refElement(__CDP_ARG__.ref);
   if (!base) return setResult(notFoundResult({ ref: __CDP_ARG__.ref } as OperableArg));
   const el = climbAncestors(base, __CDP_ARG__.ancestor || 0);
-  if (!el) return setResult({ ok: false, err: `ref=${__CDP_ARG__.ref} 向上爬 ${__CDP_ARG__.ancestor || 0} 层后无元素` });
+  if (!el)
+    return setResult({ ok: false, err: `ref=${__CDP_ARG__.ref} 向上爬 ${__CDP_ARG__.ancestor || 0} 层后无元素` });
 
   // 从 el 沿 parentElement 收集到 documentElement(html),反转成根→叶顺序。
   const chain: Element[] = [];

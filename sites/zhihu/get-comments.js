@@ -15,24 +15,27 @@
 // 原语自包含:自己定位 target。改成目标问题页的 url/title 子串,或在外面用参数传入。
 const url = process.env.ZHIHU_QUESTION_URL;
 if (!url) throw new Error('需设环境变量 ZHIHU_QUESTION_URL 指向知乎问题页,或改本文件第 16 行');
-const target = await cdp.resolve(url) || (await cdp.open(url), await cdp.resolve(url));
+const target = (await cdp.resolve(url)) || (await cdp.open(url), await cdp.resolve(url));
 
 // 等评论区出现(懒加载);滚到底部多拉几屏触发加载。
 await cdp.waitForFn(target, `!!document.querySelector('.CommentItem')`, { timeout: 15000 });
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 for (let i = 0; i < 5; i++) {
   await cdp.eval(target, `window.scrollBy(0, window.innerHeight); 'ok'`);
   await sleep(600);
 }
 
-const data = await cdp.eval(target, `(() => {
+const data = await cdp.eval(
+  target,
+  `(() => {
   const items = [...document.querySelectorAll('.CommentItem')];
   return items.map(it => ({
     author: it.querySelector('.author a')?.innerText?.trim(),
     body: it.querySelector('.CommentItem-content')?.innerText?.trim(),
     likes: it.querySelector('.VoteButton')?.innerText?.trim(),
   }));
-})()`);
+})()`,
+);
 
 console.log(`共 ${data.length} 条评论:`);
 console.log(JSON.stringify(data, null, 2));

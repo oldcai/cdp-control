@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+echo 'pre-commit: npm run typecheck'
+npm run typecheck
+
+echo 'pre-commit: npm test'
+npm test

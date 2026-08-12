@@ -13,8 +13,10 @@ import { classifyRef } from '../src/inject/lib/find-root.ts';
 type RefTestGlobals = typeof globalThis & { __cdpRefs?: unknown[] };
 const refGlobals = globalThis as RefTestGlobals;
 type Entry = { elRef: WeakRef<{ isConnected: boolean; nodeType: 1 }>; parentRef: number | null };
-const fakeEntry = (isConnected: boolean, parentRef: number | null = null): Entry =>
-  ({ elRef: new WeakRef({ isConnected, nodeType: 1 as const }), parentRef });
+const fakeEntry = (isConnected: boolean, parentRef: number | null = null): Entry => ({
+  elRef: new WeakRef({ isConnected, nodeType: 1 as const }),
+  parentRef,
+});
 
 test('classifyRef: 无 __cdpRefs 登记表 → none', () => {
   refGlobals.__cdpRefs = undefined;

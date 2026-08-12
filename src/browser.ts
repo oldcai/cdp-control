@@ -1,6 +1,6 @@
 /**
  * browser.ts — 确保 CDP 浏览器就绪。
- * 语义:读 ~/.cdp-control/browser.json 拿到 exe/kind/args/port/userData;
+ * 语义:读 <CDP_HOME>/browser.json 拿到 exe/kind/args/port/userData;
  * 健康 CDP → 复用；空闲 → 同配置端口拉起；忙且非健康 → 安全回收 listener、确认释放后
  * 仍在同一配置端口拉起。绝不避让或改写端口(缺失配置时固定 bootstrap 9222)。
  * 依赖 transport + monitor + browser-discover + browser-config。不再依赖 api(无环)。
@@ -11,8 +11,17 @@ import { createServer, connect } from 'node:net';
 import { promisify } from 'node:util';
 import { getJson, setPort, HOST, PORT, sleep } from './transport';
 import { maybeSpawnDaemon } from './monitor';
+import { cdpNoAutostart } from './paths.ts';
 import { discoverCandidates, type BrowserKind } from './browser-discover';
-import { browserConfigPath, parseBrowserConfig, defaultArgs, effectiveBrowserPort, DEFAULT_PORT, DEFAULT_USER_DATA, type BrowserConfig } from './browser-config';
+import {
+  browserConfigPath,
+  parseBrowserConfig,
+  defaultArgs,
+  effectiveBrowserPort,
+  DEFAULT_PORT,
+  DEFAULT_USER_DATA,
+  type BrowserConfig,
+} from './browser-config';
 import {
   prepareFixedPort,
   settleFixedPortLaunch,
@@ -26,8 +35,17 @@ import {
   type PortState,
 } from './browser-port';
 
-export interface EnsureResult { ready: boolean; started: boolean; browser?: string; userData?: string; }
-export interface KillResult { ok: boolean; port: number; reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken'; }
+export interface EnsureResult {
+  ready: boolean;
+  started: boolean;
+  browser?: string;
+  userData?: string;
+}
+export interface KillResult {
+  ok: boolean;
+  port: number;
+  reason: 'killed' | 'noProcess' | 'stillUp' | 'noConfig' | 'broken';
+}
 
 let child: ReturnType<typeof spawn> | null = null;
 const execFileAsync = promisify(execFile);
@@ -46,7 +64,10 @@ function launch(exe: string, args: string[], port: number, userData: string): Pr
   killLast();
   return new Promise((resolve, reject) => {
     let settled = false;
-    const launched = spawn(exe, [...args, `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`], { detached: true, stdio: 'ignore' });
+    const launched = spawn(exe, [...args, `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`], {
+      detached: true,
+      stdio: 'ignore',
+    });
     child = launched;
     launched.once('error', error => {
       if (settled) return;
@@ -77,7 +98,10 @@ async function waitReady(timeoutMs = 20000, launched: ReturnType<typeof spawn> |
   try {
     while (Date.now() - t0 < timeoutMs) {
       if (earlyExit) throw new Error(earlyExit);
-      try { const v: unknown = await getJson('/json/version'); if (hasCdpWebSocket(v)) return; } catch {}
+      try {
+        const v: unknown = await getJson('/json/version');
+        if (hasCdpWebSocket(v)) return;
+      } catch {}
       await new Promise(r => setTimeout(r, 400));
     }
     if (earlyExit) throw new Error(earlyExit);
@@ -92,10 +116,14 @@ async function probeReady(timeoutMs?: number): Promise<{ ready: boolean; browser
   try {
     const v: unknown = await getJson('/json/version', timeoutMs);
     if (!hasCdpWebSocket(v)) return { ready: false };
-    const browser = typeof v === 'object' && v !== null && typeof (v as Record<string, unknown>).Browser === 'string'
-      ? (v as Record<string, string>).Browser : '';
+    const browser =
+      typeof v === 'object' && v !== null && typeof (v as Record<string, unknown>).Browser === 'string'
+        ? (v as Record<string, string>).Browser
+        : '';
     return { ready: true, browser: describeBrowser(browser) };
-  } catch { return { ready: false }; }
+  } catch {
+    return { ready: false };
+  }
 }
 
 /** 忙端口的并发冷启动宽限；单次请求和轮询睡眠都受同一 deadline 约束。 */
@@ -153,9 +181,13 @@ function connectState(port: number): Promise<PortState> {
     };
     socket.setTimeout(1000, () => finish({ state: 'unknown', reason: `connect ${HOST}:${port} ETIMEDOUT` }));
     socket.once('connect', () => finish({ state: 'busy' }));
-    socket.once('error', (error: NodeJS.ErrnoException) => finish(error.code === 'ECONNREFUSED'
-      ? { state: 'free' }
-      : { state: 'unknown', reason: `connect ${HOST}:${port} ${error.code ?? error.message}` }));
+    socket.once('error', (error: NodeJS.ErrnoException) =>
+      finish(
+        error.code === 'ECONNREFUSED'
+          ? { state: 'free' }
+          : { state: 'unknown', reason: `connect ${HOST}:${port} ${error.code ?? error.message}` },
+      ),
+    );
   });
 }
 
@@ -164,7 +196,9 @@ function bindState(port: number): Promise<PortState> {
     const server = createServer();
     let settled = false;
     const timer = setTimeout(() => {
-      try { server.close(); } catch {}
+      try {
+        server.close();
+      } catch {}
       finish({ state: 'unknown', reason: `bind ${HOST}:${port} ETIMEDOUT` });
     }, 1000);
     const finish = (state: PortState) => {
@@ -175,12 +209,20 @@ function bindState(port: number): Promise<PortState> {
     };
     // 极窄探测窗口内若有客户端连入，立即断开，避免 `server.close(cb)` 等连接结束而永久挂住。
     server.on('connection', socket => socket.destroy());
-    server.once('error', (error: NodeJS.ErrnoException) => finish(error.code === 'EADDRINUSE'
-      ? { state: 'busy' }
-      : { state: 'unknown', reason: `bind ${HOST}:${port} ${error.code ?? error.message}` }));
-    server.once('listening', () => server.close(error => finish(error
-      ? { state: 'unknown', reason: `close bind probe ${HOST}:${port} ${error.message}` }
-      : { state: 'free' })));
+    server.once('error', (error: NodeJS.ErrnoException) =>
+      finish(
+        error.code === 'EADDRINUSE'
+          ? { state: 'busy' }
+          : { state: 'unknown', reason: `bind ${HOST}:${port} ${error.code ?? error.message}` },
+      ),
+    );
+    server.once('listening', () =>
+      server.close(error =>
+        finish(
+          error ? { state: 'unknown', reason: `close bind probe ${HOST}:${port} ${error.message}` } : { state: 'free' },
+        ),
+      ),
+    );
     server.listen({ port, host: HOST, exclusive: true });
   });
 }
@@ -195,16 +237,29 @@ async function listenerPids(port: number): Promise<number[]> {
     const { stdout } = await execFileAsync('lsof', lsofListenerArgs(port), { encoding: 'utf8' });
     return parseLsofListeners(stdout, port, HOST);
   } catch (error) {
-    const stdout = typeof error === 'object' && error !== null && 'stdout' in error && typeof error.stdout === 'string'
-      ? error.stdout : '';
-    const stderr = typeof error === 'object' && error !== null && 'stderr' in error && typeof error.stderr === 'string'
-      ? error.stderr.trim() : '';
-    if (process.platform !== 'win32' && typeof error === 'object' && error !== null && 'code' in error && error.code === 1 && !stderr) {
+    const stdout =
+      typeof error === 'object' && error !== null && 'stdout' in error && typeof error.stdout === 'string'
+        ? error.stdout
+        : '';
+    const stderr =
+      typeof error === 'object' && error !== null && 'stderr' in error && typeof error.stderr === 'string'
+        ? error.stderr.trim()
+        : '';
+    if (
+      process.platform !== 'win32' &&
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 1 &&
+      !stderr
+    ) {
       // lsof status=1 表示没有匹配项；若同时带 stdout，仍按机器格式解析。
       return parseLsofListeners(stdout, port, HOST);
     }
     const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : 'unknown';
-    throw new Error(`枚举配置端口 ${HOST}:${port} 的监听进程失败(${code})${stderr ? `: ${stderr}` : ''}`, { cause: error });
+    throw new Error(`枚举配置端口 ${HOST}:${port} 的监听进程失败(${code})${stderr ? `: ${stderr}` : ''}`, {
+      cause: error,
+    });
   }
 }
 
@@ -250,7 +305,9 @@ function loadConfigOrNull(): BrowserConfig | null {
   return cfg;
 }
 
-type ColdStartResult = { kind: BrowserKind; exe: string; userData: string } | { reused: true; browser?: string; userData: string };
+type ColdStartResult =
+  | { kind: BrowserKind; exe: string; userData: string }
+  | { reused: true; browser?: string; userData: string };
 
 /** 冷启动:有配置则用(坏则抛,不兜底);无配置则在固定默认端口 bootstrap。 */
 async function coldStart(cfg: BrowserConfig | null): Promise<ColdStartResult> {
@@ -265,8 +322,7 @@ async function coldStart(cfg: BrowserConfig | null): Promise<ColdStartResult> {
       if (decision.action === 'reuse') return { reused: true, browser: decision.browser, userData: cfg.userData };
       const settled = await settleLaunchedPort(cfg.port);
       if (settled.action === 'reuse') return { reused: true, browser: settled.browser, userData: cfg.userData };
-    }
-    catch (cause) {
+    } catch (cause) {
       killLast();
       const detail = cause instanceof Error ? cause.message : String(cause);
       throw new Error(`浏览器未能在配置端口 ${cfg.port} 启动(${cfg.exe}): ${detail}`, { cause });
@@ -293,8 +349,7 @@ async function coldStart(cfg: BrowserConfig | null): Promise<ColdStartResult> {
       if (decision.action === 'reuse') return { reused: true, browser: decision.browser, userData };
       const settled = await settleLaunchedPort(port);
       if (settled.action === 'reuse') return { reused: true, browser: settled.browser, userData };
-    }
-    catch (cause) {
+    } catch (cause) {
       killLast();
       if (cause instanceof FixedPortError) throw cause;
       failures.push(`${exe}: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -304,17 +359,20 @@ async function coldStart(cfg: BrowserConfig | null): Promise<ColdStartResult> {
     maybeSpawnDaemon();
     return { kind: c.kind, exe, userData };
   }
-  throw new Error(failures.length
-    ? `找到浏览器但都未能在固定端口 ${port} 启动:\n${failures.join('\n')}\n可手动创建 ${p} 指定 exe/args`
-    : `未找到可用浏览器。可手动创建 ${p} 指定 exe/args`);
+  throw new Error(
+    failures.length
+      ? `找到浏览器但都未能在固定端口 ${port} 启动:\n${failures.join('\n')}\n可手动创建 ${p} 指定 exe/args`
+      : `未找到可用浏览器。可手动创建 ${p} 指定 exe/args`,
+  );
 }
 
 /** 确保有 CDP 浏览器在跑:就绪零开销(1 GET);未就绪自动拉起。 */
 export async function ensureBrowser(): Promise<EnsureResult> {
   // 无配置也必须把 transport 恢复到权威默认 9222，不能继承 CDP_PORT 等漂移值。
   let cfg: BrowserConfig | null;
-  try { cfg = loadConfigOrNull(); }
-  catch (cause) {
+  try {
+    cfg = loadConfigOrNull();
+  } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     throw new Error(`${detail}\n浏览器启动配置损坏,不做兜底,请编辑 ${browserConfigPath()}`, { cause });
   }
@@ -322,6 +380,10 @@ export async function ensureBrowser(): Promise<EnsureResult> {
   if (cfg?.userData) mkdirSync(cfg.userData, { recursive: true });
   const probe = await probeReady();
   if (probe.ready) return { ready: true, started: false, browser: probe.browser, userData: cfg?.userData };
+  // 集成 harness/连接专用模式必须保持进程所有权：端点掉线就报错，不拉起 detached 浏览器/daemon。
+  if (cdpNoAutostart()) {
+    throw new Error(`CDP_NO_AUTOSTART=1: 端点 ${HOST}:${Number(PORT)} 未就绪，拒绝自动启动浏览器`);
+  }
   const info = await coldStart(cfg);
   if ('reused' in info) return { ready: true, started: false, browser: info.browser, userData: info.userData };
   console.error(`已自动启动浏览器: ${describeBrowser(info.exe)} (端口 ${Number(PORT)})`);
@@ -333,8 +395,11 @@ export async function killBrowser(): Promise<KillResult> {
   const p = browserConfigPath();
   if (!existsSync(p)) return { ok: false, port: 9222, reason: 'noConfig' };
   let cfg: BrowserConfig;
-  try { cfg = parseBrowserConfig(readFileSync(p, 'utf8')); }
-  catch { return { ok: false, port: 9222, reason: 'broken' }; }
+  try {
+    cfg = parseBrowserConfig(readFileSync(p, 'utf8'));
+  } catch {
+    return { ok: false, port: 9222, reason: 'broken' };
+  }
   const port = cfg.port;
   const pids = await listenerPids(port);
   const release = await reclaimFixedPortListeners(port, pids, { killPid, portState, sleep });

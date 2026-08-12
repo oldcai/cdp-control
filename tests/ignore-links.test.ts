@@ -5,9 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  hrefForMatch, linkRuleMatch, parseLinkRules,
-} from '../src/ignore-links.ts';
+import { hrefForMatch, linkRuleMatch, parseLinkRules } from '../src/ignore-links.ts';
 import { globToRegExp } from '../src/url-scope.ts';
 import { linkIgnored } from '../src/inject/lib/ignore-links.ts';
 
@@ -29,7 +27,10 @@ test('globToRegExp: * 匹配任意字符(含 /)', () => {
 
 test('linkRuleMatch: 空 pattern 全命中;非空 glob 命中 hrefForMatch', () => {
   assert.equal(linkRuleMatch({ id: 1, pattern: '', note: '' }, 'https://anything.com/x'), true);
-  assert.equal(linkRuleMatch({ id: 1, pattern: 'zhida.zhihu.com/search*', note: '' }, 'https://zhida.zhihu.com/search?q=词'), true);
+  assert.equal(
+    linkRuleMatch({ id: 1, pattern: 'zhida.zhihu.com/search*', note: '' }, 'https://zhida.zhihu.com/search?q=词'),
+    true,
+  );
   assert.equal(linkRuleMatch({ id: 1, pattern: 'zhida.zhihu.com/search*', note: '' }, 'https://example.com/x'), false);
 });
 

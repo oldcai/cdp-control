@@ -1,10 +1,20 @@
 // browser-config.test.ts — browser.json 解析 + defaultArgs 单测(纯函数)。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrowserConfig, defaultArgs, browserConfigPath, effectiveBrowserPort, DEFAULT_PORT, DEFAULT_USER_DATA } from '../src/browser-config.ts';
+import { join } from 'node:path';
+import {
+  parseBrowserConfig,
+  defaultArgs,
+  browserConfigPath,
+  effectiveBrowserPort,
+  DEFAULT_PORT,
+  DEFAULT_USER_DATA,
+} from '../src/browser-config.ts';
 
 test('parseBrowserConfig: 合法 JSON 解析(含 port/userData)', () => {
-  const c = parseBrowserConfig('{ "exe": "/x/msedge.exe", "kind": "edge", "args": ["--no-first-run"], "port": 9333, "userData": "/data" }');
+  const c = parseBrowserConfig(
+    '{ "exe": "/x/msedge.exe", "kind": "edge", "args": ["--no-first-run"], "port": 9333, "userData": "/data" }',
+  );
   assert.equal(c.exe, '/x/msedge.exe');
   assert.equal(c.kind, 'edge');
   assert.deepEqual(c.args, ['--no-first-run']);
@@ -48,7 +58,15 @@ test('defaultArgs: 通用集 + linux 加 disable-dev-shm-usage', () => {
 });
 
 test('browserConfigPath: 落在 ~/.cdp-control/browser.json', () => {
-  assert.match(browserConfigPath(), /\.cdp-control[\\/]browser\.json$/);
+  assert.match(browserConfigPath({}), /\.cdp-control[\\/]browser\.json$/);
+});
+
+test('CDP_HOME: browser.json、默认 user-data 与配置解析均落在隔离 home', () => {
+  const home = join('tmp', 'isolated-cdp-home');
+  const env = { CDP_HOME: home };
+  assert.equal(browserConfigPath(env), join(home, 'browser.json'));
+  assert.equal(DEFAULT_USER_DATA(env), join(home, 'user-data'));
+  assert.equal(parseBrowserConfig('{ "exe": "/x/msedge.exe" }', env).userData, join(home, 'user-data'));
 });
 
 test('effectiveBrowserPort: 配置端口权威；无配置固定 9222，不受 CDP_PORT 漂移', () => {

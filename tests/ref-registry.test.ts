@@ -13,8 +13,7 @@ type CdpGlobals = typeof globalThis & {
 type WeakEntry = { elRef: WeakRef<Element>; parentRef: number | null };
 
 const globals = globalThis as CdpGlobals;
-const fakeElement = (isConnected = true): Element =>
-  ({ nodeType: 1, isConnected } as unknown as Element);
+const fakeElement = (isConnected = true): Element => ({ nodeType: 1, isConnected }) as unknown as Element;
 
 beforeEach(() => {
   delete globals.__cdpRefs;

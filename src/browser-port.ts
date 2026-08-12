@@ -3,7 +3,10 @@
  * 网络/进程副作用由 browser.ts 注入；核心状态机可纯单测。
  */
 
-export interface ProbeResult { ready: boolean; browser?: string; }
+export interface ProbeResult {
+  ready: boolean;
+  browser?: string;
+}
 export type PortState = { state: 'free' } | { state: 'busy' } | { state: 'unknown'; reason: string };
 export type FixedPortAction = { action: 'reuse'; browser?: string } | { action: 'launch'; port: number };
 
@@ -18,7 +21,9 @@ export function hasCdpWebSocket(value: unknown): boolean {
   try {
     const protocol = new URL(websocket).protocol;
     return protocol === 'ws:' || protocol === 'wss:';
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
 export function lsofListenerArgs(port: number): string[] {
@@ -75,8 +80,9 @@ export async function reclaimFixedPortListeners(
 ): Promise<ListenerReclaimResult> {
   const killFailures: string[] = [];
   for (const pid of pids) {
-    try { deps.killPid(pid); }
-    catch (cause) {
+    try {
+      deps.killPid(pid);
+    } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
       killFailures.push(`${pid}: ${detail}`);
     }
@@ -120,7 +126,8 @@ async function prepareFixedPortAttempt(
     // 再走一轮完整状态判断，收紧 bind 探测与 spawn 之间的 TOCTOU 窗口。
     return prepareFixedPortAttempt(port, deps, restartCount, true);
   }
-  if (state.state === 'unknown') throw new FixedPortError(`无法确认配置端口 ${port} 的状态: ${state.reason}，拒绝启动浏览器`);
+  if (state.state === 'unknown')
+    throw new FixedPortError(`无法确认配置端口 ${port} 的状态: ${state.reason}，拒绝启动浏览器`);
 
   // 另一个并发调用可能刚 bind 端口、CDP 尚未就绪；先给有界宽限，再进入 listener 回收。
   if (deps.busyGraceProbe) {
@@ -137,8 +144,10 @@ async function prepareFixedPortAttempt(
   if (finalState.state === 'free') {
     return recheckBeforeLaunch(port, deps, restartCount);
   }
-  if (finalState.state === 'unknown') throw new FixedPortError(`无法确认配置端口 ${port} 的状态: ${finalState.reason}，拒绝启动浏览器`);
-  if (!observedPids.length) throw new FixedPortError(`配置端口 ${port} 已被占用，但找不到可归属的 TCP 监听进程，拒绝启动浏览器`);
+  if (finalState.state === 'unknown')
+    throw new FixedPortError(`无法确认配置端口 ${port} 的状态: ${finalState.reason}，拒绝启动浏览器`);
+  if (!observedPids.length)
+    throw new FixedPortError(`配置端口 ${port} 已被占用，但找不到可归属的 TCP 监听进程，拒绝启动浏览器`);
 
   // 探活本身会花时间；复探之后重新取快照，快照变化说明端点身份可能已换，必须重启判断而非杀旧 PID。
   const currentPids = await listenerSnapshot(port, deps);
@@ -158,12 +167,17 @@ async function prepareFixedPortAttempt(
 
   const release = await reclaimFixedPortListeners(port, killPids, deps);
   if (release.state === 'free') {
-    if (release.killFailures.length) throw new FixedPortError(`配置端口 ${port} 的监听进程结束失败(${release.killFailures.join('; ')})；端口现已释放，但拒绝继续启动`);
+    if (release.killFailures.length)
+      throw new FixedPortError(
+        `配置端口 ${port} 的监听进程结束失败(${release.killFailures.join('; ')})；端口现已释放，但拒绝继续启动`,
+      );
     return recheckBeforeLaunch(port, deps, restartCount);
   }
   const failure = release.killFailures.length ? `；监听进程结束失败(${release.killFailures.join('; ')})` : '';
   if (release.state === 'unknown') {
-    throw new FixedPortError(`结束监听进程后无法确认配置端口 ${port} 的状态: ${release.reason}${failure}，拒绝启动浏览器`);
+    throw new FixedPortError(
+      `结束监听进程后无法确认配置端口 ${port} 的状态: ${release.reason}${failure}，拒绝启动浏览器`,
+    );
   }
   throw new FixedPortError(`结束监听进程后配置端口 ${port} 超时未释放${failure}，拒绝启动浏览器`);
 }
@@ -244,9 +258,19 @@ export function parseLsofListeners(out: string, port: number, host = '127.0.0.1'
   let family = '';
   for (const line of out.split(/\r?\n/)) {
     const field = line[0];
-    if (field === 'p') { currentPid = Number(line.slice(1).trim()) || 0; family = ''; continue; }
-    if (field === 'f') { family = ''; continue; }
-    if (field === 't') { family = line.slice(1).trim(); continue; }
+    if (field === 'p') {
+      currentPid = Number(line.slice(1).trim()) || 0;
+      family = '';
+      continue;
+    }
+    if (field === 'f') {
+      family = '';
+      continue;
+    }
+    if (field === 't') {
+      family = line.slice(1).trim();
+      continue;
+    }
     if (field !== 'n' || !currentPid) continue;
     const address = line.slice(1).trim();
     if (addressServes(address, host, port, family)) addPid(pids, currentPid);
