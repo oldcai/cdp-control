@@ -13,6 +13,7 @@ export interface ViewNode {
   agg?: boolean;   // 显示文本来自 innerText/grabText 兜底(聚合文本)而非直接文本节点
   shadow?: boolean; // 宿主带 shadowRoot:其下子节点来自 shadow DOM,CSS 选择器不能穿透,须用 ref 定位
   ref?: number;    // view 登记的全局引用序号(见 __cdpRefs),输出标注 [ref=i],agent 用它直接操作真实元素
+  budgetRef?: number; // 该节点在 __cdpRefs 的稳定句柄(含默认不打印 ref 的隐藏包装节点),仅供预算折叠留占位
   hidden?: boolean; // 纯容器 div(叶子路径上的祖父):ref 已登记进 __cdpRefs 但 view 默认不显示,info 反查可显示
   fold?: string;   // 命中折叠规则:输出一行 ▸ [ref=i] <备注>,不展开子树(但保留 ref,view <ref> 可展开)
   foldSize?: number; // 被折叠掉的子树元素数,折叠行 ▸ 备注 (N) 显示规模(view-core 折叠点算)
@@ -77,8 +78,23 @@ export function markText(n: ViewNode): boolean {
  * 把已建好的 ViewNode 树折叠成带缩进的输出行数组(标签 + 引用文本)。与旧 view.js 的
  * leafish / leafLabel / inlineLabel / walk 及末尾 push(v.tag...) + for-walk 调用逐字一致。
  */
-export function formatView(v: ViewNode, maxLen?: number): string[] {
+export function formatView(
+  v: ViewNode,
+  maxLen?: number,
+  budgetFolds?: ReadonlyMap<number, string>,
+  expandedShadowRefs?: ReadonlySet<number>,
+): string[] {
   const out: string[] = [];
+  const budgetFoldMemo = new WeakMap<ViewNode, boolean>();
+  const containsBudgetFold = (n: ViewNode): boolean => {
+    if (!budgetFolds?.size) return false;
+    const cached = budgetFoldMemo.get(n);
+    if (cached != null) return cached;
+    const ref = n.budgetRef ?? n.ref;
+    const found = (ref != null && budgetFolds?.has(ref) === true) || n.kids.some(containsBudgetFold);
+    budgetFoldMemo.set(n, found);
+    return found;
+  };
   const leafish = (n: ViewNode) => n.inter || n.tag === 'img';
   const leafLabel = (n: ViewNode) => {
     let l = tagLabel(n) + inputAttr(n);
@@ -98,6 +114,14 @@ export function formatView(v: ViewNode, maxLen?: number): string[] {
   };
 
   function walk(n: ViewNode, depth: number, path: string[]) {
+    // 预算折叠发生在整棵树建完、ref 分配完之后。summary 已由纯预算决策函数生成，
+    // 此处只按稳定 budgetRef 替换渲染，不改树、不删 kids，因此不会造成 ref 漂移。
+    const budgetRef = n.budgetRef ?? n.ref;
+    const budgetSummary = budgetRef != null ? budgetFolds?.get(budgetRef) : undefined;
+    if (budgetSummary != null) {
+      out.push('  '.repeat(depth) + budgetSummary);
+      return;
+    }
     // 折叠节点:输出一行带备注的折叠标识 + ref + 折叠规模,不展开子树(子树里的嵌套折叠在 view <ref> 展开时才显现)。
     if (n.fold != null) {
       out.push('  '.repeat(depth) + '▸' + refTag(n) + ' ' + n.fold + (n.shadow ? '[shadow]' : '')
@@ -106,7 +130,7 @@ export function formatView(v: ViewNode, maxLen?: number): string[] {
     }
     // 整页 view 对带 shadowRoot 的 host(depth>0 子节点,已登记 ref)只输出占位行,不展开其 shadow 子树
     // ——深入 shadow 用 `view <ref>` / `--selector-file`(局部 view 时该 host 是根 depth=0,正常展开)。
-    if (depth > 0 && n.shadow && n.ref != null) {
+    if (depth > 0 && n.shadow && n.ref != null && !expandedShadowRefs?.has(n.ref)) {
       out.push('  '.repeat(depth) + tagLabel(n) + refTag(n));
       return;
     }
@@ -152,13 +176,13 @@ export function formatView(v: ViewNode, maxLen?: number): string[] {
     const newPath = path.concat([tagLabel(n) + pathRef]);
     // productive = 有文本且非琐碎叶,或可交互,或折叠节点,或带 ref 的 shadow host
     // (后两者 hasText/inter 都 false,需显式纳入才能 walk 到占位/▸ 输出;空壳 shadow host 不纳入就会从整页 view 消失)
-    const productive = kids.filter(k => (k.hasText && !isTrivialLeaf(k)) || k.inter || !!k.state?.length
-      || k.fold != null || (k.shadow && k.ref != null));
+    const productive = kids.filter(k => containsBudgetFold(k) || (k.hasText && !isTrivialLeaf(k))
+      || k.inter || !!k.state?.length || k.fold != null || (k.shadow && k.ref != null));
     if (productive.length === 1) { walk(productive[0], depth, newPath); return; }
     if (productive.length >= 2) {
       // 交互/带 ref/含交互子代的节点不内联折叠:必须各自成行,否则 [ref=i] 标注被吞、agent 拿不到可操作句柄。
       // 含交互子代(hasInter)也不能折叠——纯包装 DIV 内含按钮时,内联只取第一个文本,把其它交互叶的 ref 整颗吞掉(如知乎评论动作行)。
-      if (productive.every(k => inlineable(k) && !k.inter && !k.hasInter && k.ref == null)) {
+      if (productive.every(k => !containsBudgetFold(k) && inlineable(k) && !k.inter && !k.hasInter && k.ref == null)) {
         const items = productive.map(inlineLabel).join(' ');
         out.push('  '.repeat(depth) + (newPath.length ? newPath.join(' > ') + ' ' : '') + items);
         return;
