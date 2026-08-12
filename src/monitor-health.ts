@@ -1,0 +1,202 @@
+/** monitor daemon 的纯身份/健康协议；无副作用，便于隔离测试。 */
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { cdpHome, type CdpEnvironment } from './paths.ts';
+
+export interface DaemonIdentity {
+  home: string;
+  cdpHost: string;
+  cdpPort: string;
+}
+
+interface DaemonHealth {
+  ok: true;
+  identity: DaemonIdentity;
+  targets: number;
+}
+
+export type RetirableDaemonStatus = 'legacy' | 'stale-owned';
+export type DaemonHealthStatus = 'current' | RetirableDaemonStatus | 'foreign' | 'unreachable';
+
+export interface DaemonPollOptions {
+  fetchImpl?: typeof fetch;
+  pollAttempts?: number;
+  pollIntervalMs?: number;
+  sleepImpl?: (milliseconds: number) => Promise<void>;
+}
+
+export interface EnsureDaemonOptions extends DaemonPollOptions {
+  retireDaemonImpl: (kind: RetirableDaemonStatus) => Promise<void>;
+  spawnImpl: () => Promise<void>;
+}
+
+const DEFAULT_POLL_INTERVAL_MS = 300;
+const DEFAULT_POLL_ATTEMPTS = Math.ceil(8000 / DEFAULT_POLL_INTERVAL_MS);
+
+function defaultSleep(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+export function daemonIdentity(
+  environment: CdpEnvironment = process.env,
+  fallbackHome: string = homedir(),
+  cdpHost: string,
+  cdpPort: string | number,
+): DaemonIdentity {
+  return {
+    home: resolve(cdpHome(environment, fallbackHome)),
+    cdpHost,
+    cdpPort: String(cdpPort),
+  };
+}
+
+export function daemonPidFilePath(environment: CdpEnvironment = process.env, fallbackHome: string = homedir()): string {
+  return join(resolve(cdpHome(environment, fallbackHome)), 'cdp-listen.pid');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every(key => Object.hasOwn(value, key));
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function isDaemonIdentity(value: unknown): value is DaemonIdentity {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['home', 'cdpHost', 'cdpPort']) &&
+    typeof value.home === 'string' &&
+    typeof value.cdpHost === 'string' &&
+    typeof value.cdpPort === 'string'
+  );
+}
+
+function isDaemonHealth(value: unknown): value is DaemonHealth {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['ok', 'identity', 'targets']) &&
+    value.ok === true &&
+    isNonNegativeInteger(value.targets) &&
+    isDaemonIdentity(value.identity)
+  );
+}
+
+function isLegacyDaemonHealth(value: Record<string, unknown>): boolean {
+  return hasExactKeys(value, ['ok', 'targets']) && value.ok === true && isNonNegativeInteger(value.targets);
+}
+
+export function sameDaemonIdentity(actual: DaemonIdentity, expected: DaemonIdentity): boolean {
+  return actual.home === expected.home && actual.cdpHost === expected.cdpHost && actual.cdpPort === expected.cdpPort;
+}
+
+/**
+ * 识别端口上的 daemon 协议版本与身份。只有连接失败才是 unreachable；
+ * 可连接但非 2xx/非 JSON/非 daemon health 都当 foreign，避免在仍占用端口时误 spawn。
+ */
+export async function probeDaemonHealth(
+  port: number,
+  expected: DaemonIdentity,
+  fetchImpl: typeof fetch = fetch,
+): Promise<DaemonHealthStatus> {
+  let response: Response;
+  try {
+    response = await fetchImpl(`http://127.0.0.1:${port}/health`, { redirect: 'manual' });
+  } catch {
+    return 'unreachable';
+  }
+  if (!response.ok) return 'foreign';
+
+  let health: unknown;
+  try {
+    health = await response.json();
+  } catch {
+    return 'foreign';
+  }
+  if (!isRecord(health)) return 'foreign';
+  if (!Object.hasOwn(health, 'identity')) {
+    return isLegacyDaemonHealth(health) ? 'legacy' : 'foreign';
+  }
+  if (!isDaemonHealth(health)) return 'foreign';
+  if (sameDaemonIdentity(health.identity, expected)) return 'current';
+  return health.identity.home === expected.home ? 'stale-owned' : 'foreign';
+}
+
+/** 仅在二次确认状态未变后退出已验证进程，并等 health 改变。 */
+async function retireOwnedDaemon(
+  port: number,
+  expected: DaemonIdentity,
+  kind: RetirableDaemonStatus,
+  options: DaemonPollOptions & { retireDaemonImpl: (kind: RetirableDaemonStatus) => Promise<void> },
+): Promise<DaemonHealthStatus> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const sleepImpl = options.sleepImpl ?? defaultSleep;
+  const pollAttempts = options.pollAttempts ?? DEFAULT_POLL_ATTEMPTS;
+  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const confirmed = await probeDaemonHealth(port, expected, fetchImpl);
+  if (confirmed !== kind) return confirmed;
+
+  await options.retireDaemonImpl(kind);
+  for (let attempt = 0; attempt < pollAttempts; attempt++) {
+    await sleepImpl(pollIntervalMs);
+    const status = await probeDaemonHealth(port, expected, fetchImpl);
+    if (status !== kind) return status;
+  }
+  return kind;
+}
+
+/** 纯生命周期编排：fetch/sleep/spawn 均可注入，不需要启停真实 daemon 即可验证升级路径。 */
+export async function ensureDaemonReady(
+  port: number,
+  expected: DaemonIdentity,
+  options: EnsureDaemonOptions,
+): Promise<void> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const sleepImpl = options.sleepImpl ?? defaultSleep;
+  const pollAttempts = options.pollAttempts ?? DEFAULT_POLL_ATTEMPTS;
+  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  let status = await probeDaemonHealth(port, expected, fetchImpl);
+  if (status === 'current') return;
+  if (status === 'foreign') throw new Error(`监听端口 ${port} 已被其它 identity 的 daemon 占用`);
+
+  if (status === 'legacy' || status === 'stale-owned') {
+    const retiring = status;
+    status = await retireOwnedDaemon(port, expected, retiring, {
+      fetchImpl,
+      pollAttempts,
+      pollIntervalMs,
+      retireDaemonImpl: options.retireDaemonImpl,
+      sleepImpl,
+    });
+    if (status === 'current') return;
+    if (status === 'foreign') throw new Error(`监听端口 ${port} 已被其它 identity 的 daemon 占用`);
+    if (status === 'legacy' || status === 'stale-owned') {
+      throw new Error(`已拥有的监听 daemon 无法在端口 ${port} 退出`);
+    }
+  }
+
+  await options.spawnImpl();
+  for (let attempt = 0; attempt < pollAttempts; attempt++) {
+    await sleepImpl(pollIntervalMs);
+    status = await probeDaemonHealth(port, expected, fetchImpl);
+    if (status === 'current') return;
+    if (status === 'foreign' || status === 'legacy' || status === 'stale-owned') {
+      throw new Error(`监听 daemon 启动失败:端口 ${port} 已被其它 daemon 占用`);
+    }
+  }
+  throw new Error('监听 daemon 启动失败');
+}
+
+/** 只有身份完全一致的 current daemon 才算健康。 */
+export async function daemonHealthy(
+  port: number,
+  expected: DaemonIdentity,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  return (await probeDaemonHealth(port, expected, fetchImpl)) === 'current';
+}

@@ -127,21 +127,25 @@ export function findRoot(selector?: string): Element | null {
 /**
  * 全部命中版:querySelectorAll,逐个返回。供 find --selector --all 用。
  * shadow 链语义同 findRoot:首段 document,之后每段在上段 host 的 shadowRoot 上 querySelectorAll。
- * 链尾用 querySelectorAll 收集全部;非链直接 document.querySelectorAll。
- * 任一段未命中 / host 无 shadowRoot → 返回空数组。
+ * 每一段都保留全部命中 host,再从每个 host 展开下一段;非链直接 document.querySelectorAll。
+ * 无 shadowRoot 或下一段未命中的单个分支会被跳过;所有分支都失败时返回空数组。
  */
 export function findRootAll(selector: string): Element[] {
   if (!selector) return [];
   const parts = selector.split('>>>').map(s => s.trim());
   if (parts.length === 1) return Array.from(document.querySelectorAll(parts[0]));
-  // shadow 链:前 n-1 段逐段穿透(每段取首个 host),末段 querySelectorAll 收全部
-  let node: Element | null = document.querySelector(parts[0]);
-  for (let i = 1; i < parts.length - 1; i++) {
-    if (!node || !node.shadowRoot) return [];
-    node = node.shadowRoot.querySelector(parts[i]);
+  // shadow 链:将本层的全部命中作为下层 host,保留各分支的结果顺序。
+  let nodes: Element[] = Array.from(document.querySelectorAll(parts[0]));
+  for (let i = 1; i < parts.length; i++) {
+    const next: Element[] = [];
+    for (const node of nodes) {
+      if (!node.shadowRoot) continue;
+      next.push(...Array.from(node.shadowRoot.querySelectorAll(parts[i])));
+    }
+    nodes = next;
+    if (!nodes.length) return [];
   }
-  if (!node || !node.shadowRoot) return [];
-  return Array.from(node.shadowRoot.querySelectorAll(parts[parts.length - 1]));
+  return nodes;
 }
 
 /**
