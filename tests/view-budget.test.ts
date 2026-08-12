@@ -4,8 +4,14 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 import { markText, type ViewNode } from '../src/inject/lib/view-format.ts';
-import { formatApproxChars, renderBudgetedView, renderFocusedBudgetedView } from '../src/inject/lib/view-budget.ts';
+import {
+  formatApproxChars,
+  renderBudgetedView,
+  renderFocusedBudgetedView,
+  selectNonOverlappingCandidates,
+} from '../src/inject/lib/view-budget.ts';
 
 function mk(over: Partial<ViewNode>): ViewNode {
   return {
@@ -193,4 +199,27 @@ test('renderFocusedBudgetedView: 原本会被 productive 过滤的琐碎区域�
 
   assert.ok(result.lines.some(line => line.includes('▸ [ref=1] span')));
   assert.ok(result.lines.some(line => line.includes('焦点正文')));
+});
+
+test('selectNonOverlappingCandidates: 后代先入选时禁止祖先随后遮住它并造成账单虚计', () => {
+  const selected = selectNonOverlappingCandidates([
+    { ref: 2, ancestorRefs: [1] },
+    { ref: 1, ancestorRefs: [] },
+    { ref: 3, ancestorRefs: [] },
+  ]);
+
+  assert.deepEqual(selected.map(candidate => candidate.ref), [2, 3]);
+});
+
+test('renderBudgetedView: 数千平级候选以有界批次渲染，不随折叠数做全树平方重算', () => {
+  const count = 3000;
+  const kids = Array.from({ length: count }, (_, index) => textNode(index + 1, '甲'.repeat(100)));
+  const root = prepare(mk({ tag: 'body', kids, size: count + 1 }));
+
+  const started = performance.now();
+  const result = renderBudgetedView(root, 1);
+  const elapsedMs = performance.now() - started;
+
+  assert.equal(result.foldedRefs.length, count);
+  assert.ok(elapsedMs < 3000, `3000 个平级候选耗时 ${Math.round(elapsedMs)}ms，应保持在有界批次内`);
 });

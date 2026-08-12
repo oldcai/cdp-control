@@ -88,9 +88,9 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 
 ### view-format + budget
 **纯渲染 + 总量折叠**:`view-format.ts` 的 `markText/formatView` 完全脱离 DOM;`view-budget.ts` 在树和 ref 全部完成后才做预算决策。
-- **体量与排序**:先用同一个 `formatView(maxLen)` 计算每个可折叠子树的渲染字符数(`lines.join('\n').length`),按字符数降序、同体量按先序稳定排序。每次试折后再完整实渲染,只有确实减少字符才接受,够预算即停。
+- **体量与排序**:先用同一个 `formatView(maxLen)` 计算每个可折叠子树的渲染字符数(`lines.join('\n').length`),按字符数降序、同体量按先序稳定排序。互为祖先/后代的候选只保留排名靠前者;小集合逐个、大集合切成最多 32 批完整实渲染,只有确实减少字符的批次才接受,避免大页逐折全树重算退化为 O(N²)。
 - **折叠占位**:预算折叠不删 `kids`、不改 ref,只给 formatter 一张 `budgetRef → summary` 映射。输出 `▸ [ref=N] tag (M 个元素 · 约 X 字) ~"首句…"`;根节点永不入选,故 `view <ref> --budget N` 会保留该区域根并只在内部继续折叠。
-- **focus**:`view --focus R --budget N` 先在清空 ref 表前把旧 `R` 解析成 Element,整页重建后按 Element 身份找回新树节点。纯函数先折焦点路径之外的首个可登记区域,保留祖先骨架并完整展开焦点子树;若仍超预算,只在焦点子树内部继续按体量折叠。`focus` 与位置 ref/selector 互斥且必须带预算。
+- **focus**:`view --focus R --budget N` 先把既有 `R` 解析成 Element,整页重建时放开该元素的 composed 祖先路径(不应用持久/临时 fold),再按 Element 身份找回树节点。纯函数先折焦点路径之外的首个可登记区域,保留祖先骨架并完整展开焦点子树;若仍超预算,只在焦点子树内部继续按体量折叠。`focus` 与位置 ref/selector 互斥且必须带预算。
 - **账单与下界**:显式预算时末行是 `# 预算 N 字 · 已用 U · 折叠 K 处(view <ref> 展开)`,`已用`包含树、换行和账单自身。若骨架+账单本身已经超过极小预算,骨架优先且账单如实报告超额。
 - **兼容性**:`budget` 缺省时入口仍直接走原 `formatView`,不加账单、输出逐字节不变。`maxLen` 先约束单条文本,`budget` 再约束总渲染量,两者正交叠加。
 
@@ -175,7 +175,7 @@ Node 侧统一 `invoke(target, expr)` 执行注入脚本并解包:成功返回�
 ## 测试
 
 - `tests/*.test.ts` 用 Node 内置 `node:test`+`node:assert/strict`,零运行时依赖。
-- 纯函数单测:`view-utils.ts`、`view-format.ts`(formatView/markText)、`view-budget.ts`(排序/削减/账单/骨架下界/maxLen 叠加)、`genSel.ts`、`find-root.ts`(refElement/climbAncestors/classifyRef)、`ref-registry.test.ts`(WeakRef 形态/复号追加/parentRef 刷新/WeakMap 只查)、`click-position.ts`(中心可用性/跨 shadow 命中链)、`click-events.ts`(moved/pressed/released 顺序与参数)、`folds.ts`(parseRules/domainMatch/pathMatch/matchFolds/loadFolds,临时 CDP_FOLD_FILE)、`ignore-links.ts`(hrefForMatch/globToRegExp/linkRuleMatch/parseLinkRules + 浏览器侧 linkIgnored)、`target-arg.ts`(normArg 防呆)、`keys.ts`(parseKeySpec)、`transport.ts`(resolveTarget)、`port.ts`(portFree/findFreePort,真实 bind 高位端口不 mock)。
+- 纯函数单测:`view-utils.ts`、`view-format.ts`(formatView/markText)、`view-budget.ts`(排序/削减/账单/骨架下界/maxLen 叠加/候选不重叠/3000 节点性能回归)、`genSel.ts`、`find-root.ts`(refElement/climbAncestors/classifyRef)、`ref-registry.test.ts`(WeakRef 形态/复号追加/parentRef 刷新/WeakMap 只查)、`click-position.ts`(中心可用性/跨 shadow 命中链)、`click-events.ts`(moved/pressed/released 顺序与参数)、`folds.ts`(parseRules/domainMatch/pathMatch/matchFolds/loadFolds,临时 CDP_FOLD_FILE)、`ignore-links.ts`(hrefForMatch/globToRegExp/linkRuleMatch/parseLinkRules + 浏览器侧 linkIgnored)、`target-arg.ts`(normArg 防呆)、`keys.ts`(parseKeySpec)、`transport.ts`(resolveTarget)、`port.ts`(portFree/findFreePort,真实 bind 高位端口不 mock)。
 - 注入侧复杂 DOM 行为(buildView/fold/inputInfo/state、find-entry 穿透 shadow、feedback observer/子树黑名单、recoverRef live 分支)主要靠浏览器实测(见 SKILL.md);预算链路另用最小假 DOM 锁定 `buildView` 两遍分配/复号 → 自动折叠不改 ref。纯函数分支(`formatView` 的 `·屏`/状态/shadow 占位/fold 优先/`inputAttr`、`feedback` 的 `foldTimestampRun`/class 差集/属性限量)有单测。
 
 ## 文档分工

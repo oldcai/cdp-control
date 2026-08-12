@@ -105,7 +105,14 @@ setResult((async () => {
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
   }
   const visibleOnly = !!__CDP_ARG__.visibleOnly;
-  const v = buildView(root, { visibleOnly, viewport: true, folds: __CDP_ARG__.folds, ignoreLinks: __CDP_ARG__.ignoreLinks, maxLen: __CDP_ARG__.maxLen });
+  const v = buildView(root, {
+    visibleOnly,
+    viewport: true,
+    folds: __CDP_ARG__.folds,
+    ignoreLinks: __CDP_ARG__.ignoreLinks,
+    maxLen: __CDP_ARG__.maxLen,
+    unfoldPathTo: focusEl || undefined,
+  });
   markText(v);
   // 缺省路径必须保持原输出逐字节不变；只有显式给 budget 才追加账单并启用自动折叠。
   let lines: string[];
