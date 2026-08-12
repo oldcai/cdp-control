@@ -112,7 +112,7 @@ test('probeHostCdp: 主连接未就绪时复用其他解析地址的健康 CDP',
   assert.deepEqual(calls, ['primary', 'resolve', 'address:192.0.2.44', 'address:2001:db8::44']);
 });
 
-test('probeHostCdp: 主连接健康时只做一次探活', async () => {
+test('probeHostCdp: 单一解析地址的主连接健康时一次探活即可 pin', async () => {
   const calls: string[] = [];
   assert.deepEqual(
     await probeHostCdp({
@@ -122,16 +122,54 @@ test('probeHostCdp: 主连接健康时只做一次探活', async () => {
       },
       resolveAddresses: async () => {
         calls.push('resolve');
-        return ['127.0.0.1', '::1'];
+        return ['127.0.0.1'];
       },
       address: async host => {
         calls.push(`address:${host}`);
         return { ready: false };
       },
     }),
-    { ready: true, browser: 'Chrome/primary' },
+    { ready: true, browser: 'Chrome/primary', address: '127.0.0.1' },
   );
-  assert.deepEqual(calls, ['primary']);
+  assert.deepEqual(calls, ['primary', 'resolve']);
+});
+
+test('probeHostCdp: 多地址主连接健康也必须归属并 pin 到具体健康地址', async () => {
+  const calls: string[] = [];
+  assert.deepEqual(
+    await probeHostCdp({
+      primary: async () => {
+        calls.push('primary');
+        return { ready: true, browser: 'Chrome/hostname-primary' };
+      },
+      resolveAddresses: async () => {
+        calls.push('resolve');
+        return ['192.0.2.44', '2001:db8::44'];
+      },
+      address: async host => {
+        calls.push(`address:${host}`);
+        return host === '2001:db8::44' ? { ready: true, browser: 'Chrome/resolved-owner' } : { ready: false };
+      },
+    }),
+    { ready: true, browser: 'Chrome/resolved-owner', address: '2001:db8::44' },
+  );
+  assert.deepEqual(calls, ['primary', 'resolve', 'address:192.0.2.44', 'address:2001:db8::44']);
+});
+
+test('probeHostCdp: 多地址 primary 健康但无法归属数值地址时 fail closed', async () => {
+  await assert.rejects(
+    () =>
+      probeHostCdp({
+        primary: async () => ({ ready: true, browser: 'Chrome/ambiguous-primary' }),
+        resolveAddresses: async () => ['192.0.2.44', '192.0.2.45'],
+        address: async () => ({ ready: false }),
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof FixedPortError);
+      assert.match(error.message, /健康 CDP.*数值地址.*拒绝/);
+      return true;
+    },
+  );
 });
 
 test('probePortAddresses: localhost 所有地址都逐一 connect 再逐一 bind', async () => {

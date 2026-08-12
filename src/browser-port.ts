@@ -88,23 +88,28 @@ export interface HostCdpProbeDependencies {
 }
 
 /**
- * 主 hostname 连接未就绪时检查全部解析地址。若其中已有健康 CDP，不能再把同一
- * host 范围的 listener 并集当作非健康占用者回收；返回数值地址交由调用方 pin 并复用。
+ * readiness 与 listener 归属必须覆盖同一地址集合。单一解析地址且主连接健康时可
+ * 直接归属；多地址即使主连接健康也要逐数值地址复核，返回真正健康的地址交由调用方 pin。
  */
 export async function probeHostCdp(deps: HostCdpProbeDependencies): Promise<ProbeResult> {
   let primary: ProbeResult = { ready: false };
   try {
     primary = await deps.primary();
   } catch {}
-  if (primary.ready) return primary;
 
   let addresses: string[];
   try {
     addresses = await deps.resolveAddresses();
-  } catch {
+  } catch (cause) {
+    if (primary.ready) {
+      throw new FixedPortError('主 hostname 返回健康 CDP，但无法解析其数值地址，拒绝继续以避免后续连接漂移', {
+        cause,
+      });
+    }
     // portState 会将同一解析失败归类为 unknown，由固定端口门禁报真因。
     return { ready: false };
   }
+  if (primary.ready && addresses.length === 1) return { ...primary, address: addresses[0] };
 
   const resolved = await Promise.all(
     addresses.map(async address => {
@@ -117,6 +122,9 @@ export async function probeHostCdp(deps: HostCdpProbeDependencies): Promise<Prob
   );
   const healthy = resolved.find(result => result.probe.ready);
   if (healthy) return { ...healthy.probe, address: healthy.address };
+  if (primary.ready) {
+    throw new FixedPortError('主 hostname 返回健康 CDP，但无法归属到任一数值地址，拒绝继续以避免后续连接漂移');
+  }
   return { ready: false };
 }
 
