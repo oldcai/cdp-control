@@ -32,15 +32,24 @@ function requiredNumericIdentity(value: string, source: string): string {
   return identity;
 }
 
-function requiredTextIdentity(value: string, source: string): string {
-  const identity = value.trim().replace(/\s+/g, ' ');
-  if (!identity) throw new Error(`${source} 未返回创建时间`);
-  return identity;
+function darwinStartTime(base64: string): string {
+  let info: Buffer;
+  try {
+    info = Buffer.from(base64.trim(), 'base64');
+  } catch {
+    throw new Error('macOS proc_pidinfo 未返回合法进程信息');
+  }
+  // struct proc_bsdinfo 的 pbi_start_tvsec / pbi_start_tvusec 位于偏移 120/128。
+  if (info.length !== 136) throw new Error('macOS proc_pidinfo 未返回合法进程信息');
+  const seconds = info.readBigUInt64LE(120);
+  const microseconds = info.readBigUInt64LE(128);
+  if (seconds === 0n || microseconds >= 1_000_000n) throw new Error('macOS proc_pidinfo 未返回合法创建时间');
+  return `${seconds}:${microseconds}`;
 }
 
 /**
  * 同步读取 birth identity，供 signal 前无 await 地复核：
- * Linux 使用内核 start ticks；Windows 使用 StartTime UTC ticks；其它 POSIX 使用 ps lstart。
+ * Linux 使用内核 start ticks；Windows 使用 StartTime UTC ticks；macOS 使用 proc_pidinfo timeval。
  */
 export function processBirthIdentity(
   pid: number,
@@ -64,6 +73,16 @@ export function processBirthIdentity(
     return `win32:${ticks}`;
   }
 
-  const started = requiredTextIdentity(dependencies.run('ps', ['-p', String(pid), '-o', 'lstart=']), `${platform} ps`);
-  return `${platform}:${started}`;
+  if (platform === 'darwin') {
+    const script =
+      'ObjC.import("Foundation");' +
+      'ObjC.bindFunction("proc_pidinfo", ["int", ["int", "int", "uint64", "void *", "int"]]);' +
+      'var data=$.NSMutableData.dataWithLength(136);' +
+      `var size=$.proc_pidinfo(${pid}, 3, 0, data.mutableBytes, 136);` +
+      'if(size!==136) throw new Error("proc_pidinfo returned "+size);' +
+      'ObjC.unwrap(data.base64EncodedStringWithOptions(0));';
+    return `darwin:${darwinStartTime(dependencies.run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script]))}`;
+  }
+
+  throw new Error(`${platform} 不支持可靠的进程创建时间读取`);
 }

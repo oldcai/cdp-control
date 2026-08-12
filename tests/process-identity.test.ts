@@ -45,14 +45,19 @@ test('processBirthIdentity: Windows 使用同步 StartTime UTC ticks', () => {
   assert.match(dependencies.calls[0]?.args[3] ?? '', /Get-Process -Id 1972/);
 });
 
-test('processBirthIdentity: macOS 使用同步 ps lstart 并规范空白', () => {
-  const dependencies = fakeDependencies({ output: ' Wed Aug 13 06:37:13 2026 \n' });
-  assert.equal(processBirthIdentity(1973, 'darwin', dependencies), 'darwin:Wed Aug 13 06:37:13 2026');
-  assert.deepEqual(dependencies.calls, [{ file: 'ps', args: ['-p', '1973', '-o', 'lstart='] }]);
+test('processBirthIdentity: macOS 使用 proc_pidinfo 的微秒级启动时间', () => {
+  const info = Buffer.alloc(136);
+  info.writeBigUInt64LE(1_786_567_646n, 120);
+  info.writeBigUInt64LE(603_475n, 128);
+  const dependencies = fakeDependencies({ output: info.toString('base64') });
+  assert.equal(processBirthIdentity(1973, 'darwin', dependencies), 'darwin:1786567646:603475');
+  assert.equal(dependencies.calls[0]?.file, '/usr/bin/osascript');
+  assert.deepEqual(dependencies.calls[0]?.args.slice(0, 3), ['-l', 'JavaScript', '-e']);
+  assert.match(dependencies.calls[0]?.args[3] ?? '', /proc_pidinfo\(1973, 3, 0/);
 });
 
 test('processBirthIdentity: 缺失/非法创建时间一律 fail closed', () => {
   assert.throws(() => processBirthIdentity(0, 'linux', fakeDependencies({})), /非法 PID/);
   assert.throws(() => processBirthIdentity(1974, 'win32', fakeDependencies({ output: '' })), /合法创建时间/);
-  assert.throws(() => processBirthIdentity(1975, 'darwin', fakeDependencies({ output: '  ' })), /未返回创建时间/);
+  assert.throws(() => processBirthIdentity(1975, 'darwin', fakeDependencies({ output: '  ' })), /未返回合法进程信息/);
 });
