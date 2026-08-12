@@ -101,6 +101,33 @@ test('prepareFixedPort: 忙端口先给并发冷启动就绪宽限；宽限内�
   assert.deepEqual(d.calls, ['probe:24119', 'state:24119', 'grace:24119']);
 });
 
+test('prepareFixedPort: 忙端口宽限期间权威端口改变时在 listener 枚举和 kill 前中止', async () => {
+  const authorityChanged = new Error('authority changed fixture');
+  const d = dependencies({
+    probes: [{ ready: false }],
+    busyGraceProbes: [{ ready: false }],
+    states: [{ state: 'busy' }],
+    listeners: [[581]],
+  });
+  let authoritativePort = 24123;
+  d.assertAuthority = port => {
+    d.calls.push(`authority:${port}->${authoritativePort}`);
+    if (port !== authoritativePort) throw authorityChanged;
+  };
+  d.busyGraceProbe = async port => {
+    d.calls.push(`grace:${port}`);
+    authoritativePort = 25123;
+    return { ready: false };
+  };
+
+  await assert.rejects(
+    () => prepareFixedPort(24123, d),
+    error => error === authorityChanged,
+  );
+  assert.ok(!d.calls.some(call => call.startsWith('listeners:') || call.startsWith('kill:')));
+  assert.equal(d.calls.at(-1), 'authority:24123->25123');
+});
+
 test('settleFixedPortLaunch: 启动器早退后重进固定端口判断；并发 CDP 在宽限内就绪则复用', async () => {
   const d = dependencies({
     probes: [{ ready: false }],
@@ -161,6 +188,42 @@ test('prepareFixedPort: 注入 launch 时两次确认空闲才在原配置端口
   };
   assert.deepEqual(await prepareFixedPort(24113, d), { action: 'launch', port: 24113 });
   assert.deepEqual(d.calls, ['probe:24113', 'state:24113', 'probe:24113', 'state:24113', 'launch:24113']);
+});
+
+test('prepareFixedPort: 最终空闲检查期间权威端口改变时在 spawn 前中止', async () => {
+  const authorityChanged = new Error('authority changed before spawn fixture');
+  const calls: string[] = [];
+  let authoritativePort = 24124;
+  let stateCount = 0;
+  const d: FixedPortDependencies = {
+    probe: async port => {
+      calls.push(`probe:${port}`);
+      return { ready: false };
+    },
+    portState: async port => {
+      calls.push(`state:${port}`);
+      stateCount++;
+      if (stateCount === 2) authoritativePort = 25124;
+      return { state: 'free' };
+    },
+    listenerPids: async () => [],
+    killPid: () => undefined,
+    launch: async port => {
+      calls.push(`launch:${port}`);
+    },
+    assertAuthority: port => {
+      calls.push(`authority:${port}->${authoritativePort}`);
+      if (port !== authoritativePort) throw authorityChanged;
+    },
+    sleep: async () => undefined,
+  };
+
+  await assert.rejects(
+    () => prepareFixedPort(24124, d),
+    error => error === authorityChanged,
+  );
+  assert.ok(!calls.some(call => call.startsWith('launch:')));
+  assert.equal(calls.at(-1), 'authority:24124->25124');
 });
 
 test('prepareFixedPort: 忙且非健康时 kill 全部去重 listener，确认释放后仍启动配置端口', async () => {

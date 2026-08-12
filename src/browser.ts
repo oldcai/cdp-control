@@ -5,7 +5,7 @@
  * 仍在同一配置端口拉起。绝不避让或改写端口(缺失配置时固定 bootstrap 9222)。
  * 依赖 transport + monitor + browser-discover + browser-config。不再依赖 api(无环)。
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, linkSync, unlinkSync } from 'node:fs';
 import { spawn, spawnSync, execFile } from 'node:child_process';
 import { createServer, connect } from 'node:net';
 import { promisify } from 'node:util';
@@ -49,6 +49,7 @@ export interface KillResult {
 }
 
 let child: ReturnType<typeof spawn> | null = null;
+let configWriteSequence = 0;
 const execFileAsync = promisify(execFile);
 
 /** 杀掉上次 bootstrap 尝试的进程(仅多候选降级时用)。 */
@@ -86,7 +87,11 @@ function launch(exe: string, args: string[], port: number, userData: string): Pr
   });
 }
 
-async function waitReady(timeoutMs = 20000, launched: ReturnType<typeof spawn> | null = child): Promise<void> {
+async function waitReady(
+  timeoutMs = 20000,
+  launched: ReturnType<typeof spawn> | null = child,
+  assertAuthority?: () => void,
+): Promise<void> {
   let earlyExit: string | null = null;
   const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
     earlyExit = `浏览器进程在 CDP 就绪前退出(code=${code ?? 'null'}, signal=${signal ?? 'null'})`;
@@ -98,11 +103,15 @@ async function waitReady(timeoutMs = 20000, launched: ReturnType<typeof spawn> |
   const t0 = Date.now();
   try {
     while (Date.now() - t0 < timeoutMs) {
+      assertAuthority?.();
       if (earlyExit) throw new Error(earlyExit);
+      let ready = false;
       try {
         const v: unknown = await getJson('/json/version');
-        if (hasCdpWebSocket(v)) return;
+        ready = hasCdpWebSocket(v);
       } catch {}
+      assertAuthority?.();
+      if (ready) return;
       await new Promise(r => setTimeout(r, 400));
     }
     if (earlyExit) throw new Error(earlyExit);
@@ -155,12 +164,6 @@ function resolveExe(exe: string): string | null {
     return p || null;
   }
   return existsSync(exe) ? exe : null;
-}
-
-function writeConfigAtomic(p: string, cfg: BrowserConfig): void {
-  const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n');
-  renameSync(tmp, p);
 }
 
 /** connect 先挡 Windows SO_REUSEADDR 的 bind 假空闲，再以严格 bind 确认真的可用。 */
@@ -274,8 +277,10 @@ function killPid(pid: number): void {
   process.kill(pid, 'SIGKILL');
 }
 
-function fixedPortDependencies(): Omit<FixedPortDependencies, 'launch'> {
-  return {
+type AuthorityGuard = (port: number) => void;
+
+function fixedPortDependencies(assertAuthority?: AuthorityGuard): Omit<FixedPortDependencies, 'launch'> {
+  const dependencies: Omit<FixedPortDependencies, 'launch'> = {
     probe: async () => probeReady(1000),
     busyGraceProbe: async () => probeReadySoon(3000),
     portState,
@@ -283,27 +288,92 @@ function fixedPortDependencies(): Omit<FixedPortDependencies, 'launch'> {
     killPid,
     sleep,
   };
+  if (assertAuthority) dependencies.assertAuthority = assertAuthority;
+  return dependencies;
 }
 
-function prepareAndLaunch(cfg: BrowserConfig): ReturnType<typeof prepareFixedPort> {
+function prepareAndLaunch(cfg: BrowserConfig, assertAuthority: AuthorityGuard): ReturnType<typeof prepareFixedPort> {
   setPort(cfg.port);
   return prepareFixedPort(cfg.port, {
-    ...fixedPortDependencies(),
+    ...fixedPortDependencies(assertAuthority),
     launch: async () => launch(cfg.exe, cfg.args, cfg.port, cfg.userData),
   });
 }
 
-function settleLaunchedPort(port: number): ReturnType<typeof settleFixedPortLaunch> {
-  return settleFixedPortLaunch(port, () => waitReady(), fixedPortDependencies());
+function settleLaunchedPort(port: number, assertAuthority: AuthorityGuard): ReturnType<typeof settleFixedPortLaunch> {
+  return settleFixedPortLaunch(
+    port,
+    () => waitReady(20000, child, () => assertAuthority(port)),
+    fixedPortDependencies(assertAuthority),
+  );
 }
 
-/** 读配置并同步 transport 端口。无配置返回 null(交由调用方 bootstrap)。 */
+function hasErrorCode(cause: unknown, code: string): boolean {
+  return typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === code;
+}
+
+/** 读配置并同步 transport 端口。无配置固定同步 9222，并返回 null 交由调用方 bootstrap。 */
 function loadConfigOrNull(): BrowserConfig | null {
   const p = browserConfigPath();
-  if (!existsSync(p)) return null;
-  const cfg = parseBrowserConfig(readFileSync(p, 'utf8'));
+  if (!existsSync(p)) {
+    setPort(DEFAULT_PORT);
+    return null;
+  }
+  let source: string;
+  try {
+    source = readFileSync(p, 'utf8');
+  } catch (cause) {
+    if (!hasErrorCode(cause, 'ENOENT')) throw cause;
+    setPort(DEFAULT_PORT);
+    return null;
+  }
+  const cfg = parseBrowserConfig(source);
   setPort(cfg.port);
   return cfg;
+}
+
+function sameBrowserConfig(left: BrowserConfig | null, right: BrowserConfig | null): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.exe === right.exe &&
+    left.kind === right.kind &&
+    left.port === right.port &&
+    left.userData === right.userData &&
+    left.args.length === right.args.length &&
+    left.args.every((arg, index) => arg === right.args[index])
+  );
+}
+
+class BrowserAuthorityChanged extends FixedPortError {
+  constructor(readonly config: BrowserConfig | null) {
+    super('browser.json 的权威配置已变化，重新进入固定端口门禁');
+  }
+}
+
+function browserAuthorityGuard(expected: BrowserConfig | null): AuthorityGuard {
+  return port => {
+    const current = loadConfigOrNull();
+    const currentPort = effectiveBrowserPort(current);
+    if (port !== currentPort || !sameBrowserConfig(expected, current)) throw new BrowserAuthorityChanged(current);
+  };
+}
+
+/** bootstrap 只在 browser.json 仍不存在时原子发布，绝不覆盖并发创建的权威配置。 */
+function writeBootstrapConfigAtomic(p: string, cfg: BrowserConfig): void {
+  const tmp = `${p}.tmp.${process.pid}.${++configWriteSequence}`;
+  writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n');
+  try {
+    linkSync(tmp, p);
+  } catch (cause) {
+    if (hasErrorCode(cause, 'EEXIST')) throw new BrowserAuthorityChanged(loadConfigOrNull());
+    throw cause;
+  } finally {
+    try {
+      unlinkSync(tmp);
+    } catch (cause) {
+      if (!hasErrorCode(cause, 'ENOENT')) throw cause;
+    }
+  }
 }
 
 /**
@@ -330,24 +400,30 @@ type ColdStartResult =
   | { kind: BrowserKind; exe: string; userData: string }
   | { reused: true; browser?: string; userData: string };
 
-/** 冷启动:有配置则用(坏则抛,不兜底);无配置则在固定默认端口 bootstrap。 */
-async function coldStart(cfg: BrowserConfig | null): Promise<ColdStartResult> {
+/** 单轮冷启动；门禁任一步发现配置变化就抛出信号，由外层以最新配置完整重试。 */
+async function coldStartWithAuthority(cfg: BrowserConfig | null): Promise<ColdStartResult> {
   const p = browserConfigPath();
+  const assertAuthority = browserAuthorityGuard(cfg);
+  assertAuthority(effectiveBrowserPort(cfg));
 
   if (cfg) {
-    if (!existsSync(cfg.exe)) throw new Error(`browser.json 的 exe 不存在: ${cfg.exe}\n请编辑 ${p}`);
+    const executableExists = existsSync(cfg.exe);
+    assertAuthority(cfg.port);
+    if (!executableExists) throw new Error(`browser.json 的 exe 不存在: ${cfg.exe}\n请编辑 ${p}`);
     mkdirSync(cfg.userData, { recursive: true });
     let decision: Awaited<ReturnType<typeof prepareFixedPort>>;
     try {
-      decision = await prepareAndLaunch(cfg);
+      decision = await prepareAndLaunch(cfg, assertAuthority);
       if (decision.action === 'reuse') return { reused: true, browser: decision.browser, userData: cfg.userData };
-      const settled = await settleLaunchedPort(cfg.port);
+      const settled = await settleLaunchedPort(cfg.port, assertAuthority);
       if (settled.action === 'reuse') return { reused: true, browser: settled.browser, userData: cfg.userData };
     } catch (cause) {
       killLast();
+      if (cause instanceof BrowserAuthorityChanged) throw cause;
       const detail = cause instanceof Error ? cause.message : String(cause);
       throw new Error(`浏览器未能在配置端口 ${cfg.port} 启动(${cfg.exe}): ${detail}`, { cause });
     }
+    assertAuthority(cfg.port);
     maybeSpawnDaemon();
     return { kind: cfg.kind, exe: cfg.exe, userData: cfg.userData };
   }
@@ -361,22 +437,27 @@ async function coldStart(cfg: BrowserConfig | null): Promise<ColdStartResult> {
     const exe = resolveExe(c.exe);
     return exe ? [{ ...c, exe }] : [];
   });
+  assertAuthority(port);
   if (!candidates.length) throw new Error(`未找到可用浏览器。可手动创建 ${p} 指定 exe/args`);
   for (const c of candidates) {
     const exe = c.exe;
     const args = defaultArgs();
     try {
-      const decision = await prepareAndLaunch({ exe, kind: c.kind, args, port, userData });
+      const decision = await prepareAndLaunch({ exe, kind: c.kind, args, port, userData }, assertAuthority);
       if (decision.action === 'reuse') return { reused: true, browser: decision.browser, userData };
-      const settled = await settleLaunchedPort(port);
+      const settled = await settleLaunchedPort(port, assertAuthority);
       if (settled.action === 'reuse') return { reused: true, browser: settled.browser, userData };
     } catch (cause) {
       killLast();
+      if (cause instanceof BrowserAuthorityChanged) throw cause;
       if (cause instanceof FixedPortError) throw cause;
       failures.push(`${exe}: ${cause instanceof Error ? cause.message : String(cause)}`);
       continue;
     }
-    writeConfigAtomic(p, { exe, kind: c.kind, args, port, userData });
+    assertAuthority(port);
+    const writtenConfig = { exe, kind: c.kind, args, port, userData };
+    writeBootstrapConfigAtomic(p, writtenConfig);
+    browserAuthorityGuard(writtenConfig)(port);
     maybeSpawnDaemon();
     return { kind: c.kind, exe, userData };
   }
@@ -385,6 +466,21 @@ async function coldStart(cfg: BrowserConfig | null): Promise<ColdStartResult> {
       ? `找到浏览器但都未能在固定端口 ${port} 启动:\n${failures.join('\n')}\n可手动创建 ${p} 指定 exe/args`
       : `未找到可用浏览器。可手动创建 ${p} 指定 exe/args`,
   );
+}
+
+/** 冷启动:有配置则用(坏则抛,不兜底);无配置则在固定默认端口 bootstrap。 */
+async function coldStart(initialConfig: BrowserConfig | null): Promise<ColdStartResult> {
+  let config = initialConfig;
+  for (let changeCount = 0; changeCount <= 3; changeCount++) {
+    try {
+      return await coldStartWithAuthority(config);
+    } catch (cause) {
+      if (!(cause instanceof BrowserAuthorityChanged)) throw cause;
+      killLast();
+      config = cause.config;
+    }
+  }
+  throw new FixedPortError('browser.json 的权威配置持续变化，拒绝执行浏览器回收或启动');
 }
 
 /** 确保有 CDP 浏览器在跑:就绪零开销(1 GET);未就绪自动拉起。 */

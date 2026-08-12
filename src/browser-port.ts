@@ -31,6 +31,8 @@ export function lsofListenerArgs(port: number): string[] {
 }
 
 export interface FixedPortDependencies {
+  /** 每个可能耗时的门禁步骤后校验配置仍授权当前端口；抛错即立即中止。 */
+  assertAuthority?(port: number): void;
   probe(port: number): Promise<ProbeResult>;
   /** 忙端口进入破坏性流程前的有界就绪宽限；运行时用于等待并发冷启动。 */
   busyGraceProbe?(port: number): Promise<ProbeResult>;
@@ -64,6 +66,7 @@ export async function settleFixedPortLaunch(
 ): Promise<FixedPortAction> {
   try {
     await waitReady();
+    assertAuthority(port, deps);
     return { action: 'launch', port };
   } catch (cause) {
     const recovered = await prepareFixedPort(port, deps);
@@ -113,10 +116,13 @@ async function prepareFixedPortAttempt(
   restartCount: number,
   launchChecked: boolean,
 ): Promise<FixedPortAction> {
+  assertAuthority(port, deps);
   const initial = await deps.probe(port);
+  assertAuthority(port, deps);
   if (initial.ready) return { action: 'reuse', browser: initial.browser };
 
   const state = await deps.portState(port);
+  assertAuthority(port, deps);
   if (state.state === 'free') {
     if (!deps.launch) return { action: 'launch', port };
     if (launchChecked) {
@@ -132,15 +138,19 @@ async function prepareFixedPortAttempt(
   // 另一个并发调用可能刚 bind 端口、CDP 尚未就绪；先给有界宽限，再进入 listener 回收。
   if (deps.busyGraceProbe) {
     const graceProbe = await deps.busyGraceProbe(port);
+    assertAuthority(port, deps);
     if (graceProbe.ready) return { action: 'reuse', browser: graceProbe.browser };
   }
 
   const observedPids = await listenerSnapshot(port, deps);
+  assertAuthority(port, deps);
 
   // 枚举 listener 后、破坏性操作前最后再确认一次，避免误杀并发期间刚就绪的健康 CDP。
   const finalProbe = await deps.probe(port);
+  assertAuthority(port, deps);
   if (finalProbe.ready) return { action: 'reuse', browser: finalProbe.browser };
   const finalState = await deps.portState(port);
+  assertAuthority(port, deps);
   if (finalState.state === 'free') {
     return recheckBeforeLaunch(port, deps, restartCount);
   }
@@ -151,21 +161,25 @@ async function prepareFixedPortAttempt(
 
   // 探活本身会花时间；复探之后重新取快照，快照变化说明端点身份可能已换，必须重启判断而非杀旧 PID。
   const currentPids = await listenerSnapshot(port, deps);
+  assertAuthority(port, deps);
   if (!samePids(observedPids, currentPids)) {
     if (restartCount >= 3) throw new FixedPortError(`配置端口 ${port} 的监听进程持续变化，拒绝执行破坏性操作`);
     return prepareFixedPortAttempt(port, deps, restartCount + 1, launchChecked);
   }
   // 破坏性操作前最后复探；并发变健康就复用且绝不 kill。
   const destructiveProbe = await deps.probe(port);
+  assertAuthority(port, deps);
   if (destructiveProbe.ready) return { action: 'reuse', browser: destructiveProbe.browser };
   // 探活可能耗时，必须在它之后再逐 PID 确认 listener 身份；变化时宁可重启状态机。
   const killPids = await listenerSnapshot(port, deps);
+  assertAuthority(port, deps);
   if (!samePids(currentPids, killPids)) {
     if (restartCount >= 3) throw new FixedPortError(`配置端口 ${port} 的监听进程持续变化，拒绝执行破坏性操作`);
     return prepareFixedPortAttempt(port, deps, restartCount + 1, launchChecked);
   }
 
   const release = await reclaimFixedPortListeners(port, killPids, deps);
+  assertAuthority(port, deps);
   if (release.state === 'free') {
     if (release.killFailures.length)
       throw new FixedPortError(
@@ -205,6 +219,10 @@ function samePids(left: number[], right: number[]): boolean {
   if (left.length !== right.length) return false;
   const rightSet = new Set(right);
   return left.every(pid => rightSet.has(pid));
+}
+
+function assertAuthority(port: number, deps: FixedPortDependencies): void {
+  deps.assertAuthority?.(port);
 }
 
 /** host → 数值地址集合；localhost 同时代表两种回环地址。 */
