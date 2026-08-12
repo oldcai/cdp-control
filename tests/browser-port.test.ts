@@ -659,6 +659,32 @@ function dependencies(
   };
 }
 
+test('prepareFixedPort: 探活后异步地址复核期间权威配置变化则不得 reuse', async () => {
+  const authorityChanged = new Error('authority changed during address-set fixture');
+  let authoritative = true;
+  let addressChecks = 0;
+  await assert.rejects(
+    () =>
+      prepareFixedPort(9222, {
+        assertAuthority: () => {
+          if (!authoritative) throw authorityChanged;
+        },
+        assertAddressSet: async () => {
+          addressChecks += 1;
+          if (addressChecks >= 2) authoritative = false;
+        },
+        probe: async () => ({ ready: true, browser: 'Chrome/stale-port' }),
+        portState: async () => ({ state: 'busy' }),
+        listenerPids: async () => [981],
+        killPid: () => {
+          throw new Error('should not kill');
+        },
+        sleep: async () => undefined,
+      }),
+    error => error === authorityChanged,
+  );
+});
+
 test('prepareFixedPort: 健康 CDP 直接复用，不查监听、不 kill', async () => {
   const d = dependencies({ probes: [{ ready: true, browser: 'Chrome/1' }] });
   assert.deepEqual(await prepareFixedPort(24101, d), { action: 'reuse', browser: 'Chrome/1' });

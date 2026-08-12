@@ -339,7 +339,7 @@ export async function settleFixedPortLaunch(
   try {
     await waitReady();
     assertAuthority(port, deps);
-    await assertAddressSet(deps);
+    await confirmFixedPortDecision(port, deps);
     return { action: 'launch', port };
   } catch (cause) {
     const recovered = await prepareFixedPort(port, deps);
@@ -417,16 +417,17 @@ async function prepareFixedPortAttempt(
   await assertAddressSet(deps);
   const initial = await deps.probe(port);
   assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await confirmFixedPortDecision(port, deps);
   if (initial.ready) return { action: 'reuse', browser: initial.browser };
 
   const state = await deps.portState(port);
   assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await confirmFixedPortDecision(port, deps);
   if (state.state === 'free') {
     if (!deps.launch) return { action: 'launch', port };
     if (launchChecked) {
       await deps.launch(port);
+      assertAuthority(port, deps);
       return { action: 'launch', port };
     }
     // 再走一轮完整状态判断，收紧 bind 探测与 spawn 之间的 TOCTOU 窗口。
@@ -439,7 +440,7 @@ async function prepareFixedPortAttempt(
   if (deps.busyGraceProbe) {
     const graceProbe = await deps.busyGraceProbe(port);
     assertAuthority(port, deps);
-    await assertAddressSet(deps);
+    await confirmFixedPortDecision(port, deps);
     if (graceProbe.ready) return { action: 'reuse', browser: graceProbe.browser };
   }
 
@@ -450,7 +451,7 @@ async function prepareFixedPortAttempt(
   // 枚举 listener 后、破坏性操作前最后再确认一次，避免误杀并发期间刚就绪的健康 CDP。
   const finalProbe = await deps.probe(port);
   assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await confirmFixedPortDecision(port, deps);
   if (finalProbe.ready) return { action: 'reuse', browser: finalProbe.browser };
   const finalState = await deps.portState(port);
   assertAuthority(port, deps);
@@ -474,7 +475,7 @@ async function prepareFixedPortAttempt(
   // 破坏性操作前最后复探；并发变健康就复用且绝不 kill。
   const destructiveProbe = await deps.probe(port);
   assertAuthority(port, deps);
-  await assertAddressSet(deps);
+  await confirmFixedPortDecision(port, deps);
   if (destructiveProbe.ready) return { action: 'reuse', browser: destructiveProbe.browser };
   // 探活可能耗时，必须在它之后再逐 PID 确认 listener 身份；变化时宁可重启状态机。
   const killPids = await listenerSnapshot(port, deps);
@@ -509,7 +510,10 @@ async function recheckBeforeLaunch(
   deps: FixedPortDependencies,
   restartCount: number,
 ): Promise<FixedPortAction> {
-  if (!deps.launch) return { action: 'launch', port };
+  if (!deps.launch) {
+    assertAuthority(port, deps);
+    return { action: 'launch', port };
+  }
   if (restartCount >= 3) throw new FixedPortError(`配置端口 ${port} 的状态持续变化，拒绝启动浏览器`);
   return prepareFixedPortAttempt(port, deps, restartCount + 1, true);
 }
@@ -539,6 +543,15 @@ function assertAuthority(port: number, deps: Pick<FixedPortDependencies, 'assert
 
 async function assertAddressSet(deps: Pick<FixedPortDependencies, 'assertAddressSet'>): Promise<void> {
   await deps.assertAddressSet?.();
+}
+
+/** 异步地址复核后必须再跑同步权威校验，才能 reuse/launch。 */
+async function confirmFixedPortDecision(
+  port: number,
+  deps: Pick<FixedPortDependencies, 'assertAuthority' | 'assertAddressSet'>,
+): Promise<void> {
+  await assertAddressSet(deps);
+  assertAuthority(port, deps);
 }
 
 /** host → 数值地址集合；localhost 同时代表两种回环地址。 */
