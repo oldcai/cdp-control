@@ -266,19 +266,26 @@ export type ListenerCleanupPlan = { action: 'kill'; pids: number[] } | { action:
 
 type ListenerReclaimDependencies = Pick<
   FixedPortDependencies,
-  'assertAuthority' | 'assertAddressSet' | 'killPid' | 'portState' | 'sleep' | 'releaseTimeoutMs' | 'releasePollMs'
+  | 'assertAuthority'
+  | 'assertAddressSet'
+  | 'listenerPids'
+  | 'killPid'
+  | 'portState'
+  | 'sleep'
+  | 'releaseTimeoutMs'
+  | 'releasePollMs'
 >;
 
 /** 对全部 listener 做 best-effort 回收；单个失败不阻断其余 PID，并保留每个真因。 */
 export async function killListenerPids(
   pids: number[],
   killPid: (pid: number) => void,
-  beforeKill?: (pid: number) => void | Promise<void>,
+  beforeKill: (pid: number) => void | Promise<void>,
 ): Promise<string[]> {
   const failures: string[] = [];
   for (const pid of pids) {
     // 权威变化不是某个 PID 的 best-effort 失败；必须在破坏性操作外层立即抛出。
-    await beforeKill?.(pid);
+    await beforeKill(pid);
     try {
       killPid(pid);
     } catch (cause) {
@@ -347,11 +354,22 @@ export async function reclaimFixedPortListeners(
   pids: number[],
   deps: ListenerReclaimDependencies,
 ): Promise<ListenerReclaimResult> {
-  const guard = async (): Promise<void> => {
+  const expectedPids = normalizePids(pids);
+  const expectedPidSet = new Set(expectedPids);
+  const guard = async (pid: number): Promise<void> => {
     assertAuthority(port, deps);
     await assertAddressSet(deps);
+    // listener 枚举必须是 kill 前最后一个 awaited 步骤；之后仅做同步权威校验并立即 kill，
+    // 避免旧 listener 退出、PID 被无关进程复用时误杀替代进程或进程树。
+    const currentPids = await listenerSnapshot(port, deps);
+    assertAuthority(port, deps);
+    if (!currentPids.includes(pid) || currentPids.some(currentPid => !expectedPidSet.has(currentPid))) {
+      throw new FixedPortError(
+        `配置端口 ${port} 的监听进程身份已变化(${expectedPids.join(', ')} -> ${currentPids.join(', ')})，拒绝结束 PID ${pid}`,
+      );
+    }
   };
-  const killFailures = await killListenerPids(pids, deps.killPid, guard);
+  const killFailures = await killListenerPids(expectedPids, deps.killPid, guard);
   assertAuthority(port, deps);
   await assertAddressSet(deps);
 
@@ -489,7 +507,7 @@ async function recheckBeforeLaunch(
   return prepareFixedPortAttempt(port, deps, restartCount + 1, true);
 }
 
-async function listenerSnapshot(port: number, deps: FixedPortDependencies): Promise<number[]> {
+async function listenerSnapshot(port: number, deps: Pick<FixedPortDependencies, 'listenerPids'>): Promise<number[]> {
   try {
     return normalizePids(await deps.listenerPids(port));
   } catch (cause) {
