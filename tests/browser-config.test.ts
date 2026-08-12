@@ -6,6 +6,8 @@ import {
   parseBrowserConfig,
   defaultArgs,
   browserConfigPath,
+  effectiveBrowserPort,
+  reloadBrowserAuthority,
   DEFAULT_PORT,
   DEFAULT_USER_DATA,
 } from '../src/browser-config.ts';
@@ -66,4 +68,21 @@ test('CDP_HOME: browser.json、默认 user-data 与配置解析均落在隔离 h
   assert.equal(browserConfigPath(env), join(home, 'browser.json'));
   assert.equal(DEFAULT_USER_DATA(env), join(home, 'user-data'));
   assert.equal(parseBrowserConfig('{ "exe": "/x/msedge.exe" }', env).userData, join(home, 'user-data'));
+});
+
+test('effectiveBrowserPort: 配置端口权威；无配置固定 9222，不受 CDP_PORT 漂移', () => {
+  assert.equal(effectiveBrowserPort({ port: 24444 }), 24444);
+  assert.equal(effectiveBrowserPort(null), DEFAULT_PORT);
+});
+
+test('reloadBrowserAuthority: 探活期间配置改口时重新读取并同步最新权威端口', () => {
+  const current = parseBrowserConfig('{ "exe": "/new/browser", "port": 25555 }');
+  const synced: number[] = [];
+  const authority = reloadBrowserAuthority(
+    24444,
+    () => current,
+    port => synced.push(port),
+  );
+  assert.deepEqual(authority, { config: current, port: 25555, portChanged: true });
+  assert.deepEqual(synced, [25555]);
 });

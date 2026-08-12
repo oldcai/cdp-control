@@ -52,7 +52,9 @@ logs 命令: 幂等注入(MONITOR_JS)+ 读取 window.__cdpLogs 并结构化序�
 - `sync()`:每 500ms 轮询 `/json/list`,对未 attach 的 tab 注入(覆盖手动新开)。WS 断开 → 移除,下轮重连重注册。
 - HTTP:仅 `/health`(存活探测)+ `/shutdown`。`/health` 只认精确自有 schema
   `{ok:true,identity:{home,cdpHost,cdpPort},targets:<非负整数>}`(无额外字段),identity 由
-  `CDP_HOME` + CDP host/port 组成;PID 存当前 `CDP_HOME/cdp-listen.pid`,不与其它 home 共享状态。
+  `CDP_HOME` + 当前 pin 后的 CDP host + 权威 browser port 组成;PID 存当前
+  `CDP_HOME/cdp-listen.pid`,不与其它 home 共享状态。默认 home 继续监听 9333；自定义 `CDP_HOME` 未显式设置
+  `CDP_LOGS_PORT` 时会从规范化 home 稳定派生隔离端口。
 - 兼容升级:只把精确旧 schema `{ok:true,targets:<非负整数>}`(无 identity/无额外字段) 视为旧版。退出时必须
   同时验证旧 tmp PID file、目标 loopback listener 的唯一 PID 和当前 CLI `__daemon` 命令行，然后对该 PID
   发信号，等 health 不可达再启动新 daemon。不向端口发 destructive HTTP；带 identity 但不匹配的
@@ -67,9 +69,6 @@ logs 命令: 幂等注入(MONITOR_JS)+ 读取 window.__cdpLogs 并结构化序�
 ### 自动装监听
 `open()` / `ensureBrowser()`(url 分支)末尾 `maybeSpawnDaemon()` → daemon 轮询给新 tab 注册。
 
-### `listen-stop`
-发起 `POST /shutdown`(daemon 响应前 `process.exit`,response 截断 reject 也算成功)→ 轮询 health 直到不可达;优雅关闭未生效再读 pid 文件 `kill` 兜底。
-
 ### 看门狗(自动退出)
 浏览器被关掉后 `/json/list` 持续探测失败。`sync()` 统计连续失败次数,达 `WATCHDOG_POLLS=10`(约 5s)即自动 `process.exit(0)`,不留孤儿 daemon。下次 `open`/`ensure`/`logs` 会自动重新拉起。实测:指向死端口约 5s 自退;浏览器在时 7s 不误杀。
 
@@ -79,7 +78,6 @@ logs 命令: 幂等注入(MONITOR_JS)+ 读取 window.__cdpLogs 并结构化序�
 - 未捕获异常:`throw new Error('chain-test')` → message + reason{name,message} + stack ✓
 - **刷新自动补**:navigate 后新打日志仍捕获(监控经 addScriptToEvaluateOnNewDocument 自动重跑)✓
 - 新开 tab 自动装:注入后打日志能捕获 ✓
-- `listen-stop` 正确停止 ✓
 
 ## 已知限制(诚实记录)
 - `window.__cdpLogs` 刷新后清空(缓冲在页面);监控自动补装但历史没了。

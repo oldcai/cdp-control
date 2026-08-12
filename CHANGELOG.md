@@ -9,6 +9,7 @@
 ### 2026-08-13
 
 - 增加零依赖、显式安装的 `core.hooksPath` pre-commit 快速门禁，以及从 Commander 真实注册项单向校验 agent skill CLI 命令/long flag 的 `docs:check` CI 门禁。
+- 将 `browser.json.port` 定为权威 CDP 端口：健康端点直接复用，非健康 listener 经稳定 PID 快照、整组回收和释放确认后仍在原端口启动；不再寻找或回写漂移端口，并覆盖并发 launcher 提前退出后的延迟就绪复用。
 
 ### 2026-08-12
 

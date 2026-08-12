@@ -5,7 +5,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { pageWs, send, listTargets, resolve, evaluate, sleep, PORT, HOST, Target } from './transport';
+import { pageWs, send, listTargets, resolve, evaluate, sleep, CONNECTION_HOST, PORT, Target } from './transport';
 import { inject, readExpr } from './inject-loader';
 import { cdpHome, cdpLogsPort, cdpNoAutostart } from './paths.ts';
 import {
@@ -15,6 +15,7 @@ import {
   ensureDaemonReady,
   type DaemonIdentity,
 } from './monitor-health.ts';
+import { daemonChildEnvironment } from './monitor-endpoint.ts';
 import { legacyDaemonPidFilePath, retireDaemonProcess } from './monitor-process';
 import { initializeBoundDaemon } from './monitor-startup.ts';
 
@@ -24,13 +25,13 @@ export function pidFilePath(): string {
   return daemonPidFilePath();
 }
 
-async function spawnDaemon(): Promise<void> {
+async function spawnDaemon(identity: DaemonIdentity, logsPort: number): Promise<void> {
   const script = daemonScriptPath();
-  // 把当前浏览器端口(经 ensureBrowser 从 browser.json 同步的 PORT)注入 daemon,daemon 连对端口。
+  // 使用 ensureDaemon 同一次快照，避免异步等待期间全局连接端点变化后 identity 与 child env 分裂。
   const child = spawn(process.execPath, [script, '__daemon'], {
     detached: true,
     stdio: 'ignore',
-    env: { ...process.env, CDP_PORT: String(PORT) },
+    env: daemonChildEnvironment(process.env, identity, logsPort),
   });
   child.unref();
 }
@@ -40,7 +41,7 @@ function daemonScriptPath(): string {
 }
 
 function currentDaemonIdentity(): DaemonIdentity {
-  return daemonIdentity(process.env, undefined, HOST, PORT);
+  return daemonIdentity(process.env, undefined, CONNECTION_HOST, PORT);
 }
 
 export async function daemonHealthy(port = LOGS_PORT): Promise<boolean> {
@@ -56,12 +57,14 @@ export async function maybeSpawnDaemon(): Promise<void> {
 }
 
 export async function ensureDaemon(port = LOGS_PORT): Promise<number> {
-  await ensureDaemonReady(port, currentDaemonIdentity(), {
+  const identity = currentDaemonIdentity();
+  const ownedPidFile = daemonPidFilePath({ CDP_HOME: identity.home });
+  await ensureDaemonReady(port, identity, {
     fetchImpl: fetch,
     retireDaemonImpl: kind =>
-      retireDaemonProcess(port, daemonScriptPath(), kind === 'legacy' ? legacyDaemonPidFilePath() : pidFilePath()),
+      retireDaemonProcess(port, daemonScriptPath(), kind === 'legacy' ? legacyDaemonPidFilePath() : ownedPidFile),
     sleepImpl: sleep,
-    spawnImpl: spawnDaemon,
+    spawnImpl: () => spawnDaemon(identity, port),
   });
   return port;
 }

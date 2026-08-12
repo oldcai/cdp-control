@@ -6,10 +6,24 @@
 export const HOST = process.env.CDP_HOST || '127.0.0.1';
 // 端口默认为 env CDP_PORT 或 9222;浏览器配置 browser.json 的 port 由 ensureBrowser 经 setPort 同步进来。
 export let PORT: string | number = process.env.CDP_PORT || 9222;
-export let BASE = `http://${HOST}:${PORT}`;
+export let CONNECTION_HOST = httpHost(HOST);
+export let BASE = `http://${CONNECTION_HOST}:${PORT}`;
+
+function httpHost(host: string): string {
+  const trimmed = host.trim();
+  if (/^\[[^\]]+\]$/.test(trimmed)) return trimmed;
+  return trimmed.includes(':') ? `[${trimmed}]` : trimmed;
+}
+
+/** 多地址 hostname 中选中健康 CDP 后 pin 低级传输，避免后续请求又命中非 CDP 地址。 */
+export function setEndpointHost(host: string): void {
+  CONNECTION_HOST = httpHost(host);
+  BASE = `http://${CONNECTION_HOST}:${PORT}`;
+}
+
 export function setPort(p: string | number): void {
   PORT = p;
-  BASE = `http://${HOST}:${p}`;
+  BASE = `http://${CONNECTION_HOST}:${p}`;
 }
 
 export interface Target {

@@ -143,7 +143,7 @@ cdp-control run "./scripts/你的脚本.js"
 | `logs [--level error,warn] [--since <ms>] [--json]` | 读控制台日志 |
 | `run <脚本文件>` | 执行自动化脚本(全局 `cdp` API,可顶层 await;**返回非 undefined 则打印**) |
 
-环境变量:`CDP_HOME`(整体覆盖 `browser.json`/`user-data`/`rules` 和 monitor daemon 身份/PID,默认 `~/.cdp-control`)、`CDP_HOST`/`CDP_PORT`(默认 `127.0.0.1:9222`)、`CDP_NO_AUTOSTART=1`(端点不就绪时只报错、不冷启动)、`CDP_LOGS_PORT`(daemon 显式端口;默认 home 用 9333,自定义 `CDP_HOME` 稳定派生隔离端口)、`CDP_RULES_DIR`(实时规则目录的更高优先级覆盖)、`CDP_FOLD_FILE`/`CDP_IGNORE_LINKS_FILE`(单文件路径覆盖,测试用)。
+环境变量:`CDP_HOME`(整体覆盖 `browser.json`/`user-data`/`rules` 和 monitor daemon 身份/PID,默认 `~/.cdp-control`)、`CDP_HOST`(默认 `127.0.0.1`；支持 `localhost`、DNS 主机和 bracketed IPv6，就绪探活/端口门禁检查全部解析地址并 pin 到健康端点)、`CDP_PORT`(低级传输初值；浏览器连接会被权威 `browser.json.port` 覆盖，无配置 bootstrap 固定 9222)、`CDP_NO_AUTOSTART=1`(端点不就绪时只报错、不冷启动)、`CDP_LOGS_PORT`(daemon 显式端口;默认 home 用 9333,自定义 `CDP_HOME` 稳定派生隔离端口)、`CDP_RULES_DIR`(实时规则目录的更高优先级覆盖)、`CDP_FOLD_FILE`/`CDP_IGNORE_LINKS_FILE`(单文件路径覆盖,测试用)。
 
 **recipe 编写**:`rules/recipes/<site>.js`(作者代码直接住 git,单一来源)一文件一站点,导出**规则数组** `module.exports = [{ name, scope: '<hostname+pathname glob>', async extract(cdp, ctx) { … return { lines: [文本行(可内嵌 [ref=N])] }; } }, …]`。`scope` 可为字符串或数组(一抽取服务多 URL 形态);同文件多元素=同站点多布局。`extract` 内可用完整 `cdp` api(`cdp.view` 拿树与 ref、`cdp.article` 取正文、`cdp.read` 展开再读、`cdp.eval` 按站点 selector 抓结构)。**三个引擎原语替你接管可复用/易错部分**:
 - **只读探针 `window.__cdpProbe`**(view 建树后自动注入):eval 里 `const { refOf, text } = window.__cdpProbe`,`refOf(el)` 反查已建树 ref(未命中 `null`,绝不按需注册)。不再手抄 refOf 样板。
@@ -221,7 +221,7 @@ await cdp.close(t);
 - eval 拿不到 → 已用 returnByValue+awaitPromise;跨域 iframe 用 `contentDocument`。
 - click 报`被 <tag.class> 遮挡`或`元素不可见/无尺寸` → 默认 trusted 坐标点击拒绝错误落点;先关闭 overlay/重新 view,仅 fixed 布局确实滚不进视口时显式 `click ... --dom`(合成事件,`isTrusted:false`)。
 - SPA 首屏慢,固定 sleep 不够 → 优先 `waitFor`/`waitForFn`。
-- 连接失败 → 先 `list` 自动启动;仍失败用 `CDP_HOST/CDP_PORT`。
+- 连接失败 → 先 `list` 自动启动；仍失败检查 `CDP_HOST`，并编辑 `<CDP_HOME>/browser.json` 的权威 `port`。
 - `open` 失败/中断留 tab → `list` 核对后 `close`。
 - fill 富文本框无效 → 已派发 input/change;React 等框架需额外 setter,用 eval 设值。
 - `--target 5173` 匹配到 DevTools 窗 → 用完整 targetId;title 相似也同法。

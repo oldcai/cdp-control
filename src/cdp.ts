@@ -116,6 +116,8 @@ program
     if (r.reason === 'noConfig') console.log('无 browser.json 配置,kill 不生效');
     else if (r.reason === 'broken') console.log('browser.json 配置损坏,无法确定端口,kill 不生效');
     else if (r.reason === 'killed') console.log(`已强制结束浏览器 (端口 ${r.port} 已释放)`);
+    else if (r.reason === 'killFailed')
+      console.log(`端口 ${r.port} 已释放，但至少一个监听进程的 kill 调用失败，未谎报完整成功`);
     else if (r.ok) console.log(`端口 ${r.port} 上没有可归属的浏览器进程,未做任何 kill`);
     else if (r.reason === 'stillUp')
       console.log(

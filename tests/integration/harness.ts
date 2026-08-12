@@ -15,8 +15,8 @@ import { delimiter, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { defaultArgs, type BrowserConfig } from '../../src/browser-config.ts';
 import { discoverCandidates, type BrowserKind, type Candidate } from '../../src/browser-discover.ts';
-import { findFreePort } from '../../src/port.ts';
 import { closeServer, startFixture, type FixtureServer } from './fixture.ts';
+import { findFreeTestPort } from './port.ts';
 
 const PROTECTED_PORTS = new Set([9222, 9223]);
 const COMMAND_TIMEOUT_MS = 20_000;
@@ -448,7 +448,7 @@ export class IntegrationHarness {
     const args = this.browserArgs();
     for (let index = 0; index < this.browsers.length; index++) {
       const browser = this.browsers[index];
-      const port = await findFreePort(basePort + index * 64, 64, '127.0.0.1');
+      const port = await findFreeTestPort(basePort + index * 64, 64);
       if (PROTECTED_PORTS.has(port)) throw new Error(`安全检查失败：禁止使用端口 ${port}`);
       await rm(this.userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       mkdirSync(this.userData, { recursive: true });
@@ -481,7 +481,7 @@ export class IntegrationHarness {
       );
     }
 
-    this.logsPort = await findFreePort(55_000 + (process.pid % 5_000), 100, '127.0.0.1');
+    this.logsPort = await findFreeTestPort(55_000 + (process.pid % 5_000), 100);
     if (PROTECTED_PORTS.has(this.logsPort)) throw new Error(`安全检查失败：禁止使用端口 ${this.logsPort}`);
     this.cliEnv = this.isolatedEnvironment();
     console.log(`INTEGRATION: browser=${this.selectedBrowser.kind} ${this.selectedBrowser.exe}`);

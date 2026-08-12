@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseLsofListeners, parseNetstatListeners } from './port.ts';
+import { parseLsofListeners, parseNetstatListeners } from './browser-port.ts';
 
 export interface DaemonProcessDependencies {
   readPidFile(path: string): string;

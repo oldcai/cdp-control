@@ -4,7 +4,16 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveTarget, type Target } from '../src/transport.ts';
+import {
+  BASE,
+  CONNECTION_HOST,
+  HOST,
+  PORT,
+  resolveTarget,
+  setEndpointHost,
+  setPort,
+  type Target,
+} from '../src/transport.ts';
 
 const list: Target[] = [
   { id: 'aaa111', url: 'devtools://devtools/bundled/inspector.html', title: 'DevTools' },
@@ -35,4 +44,21 @@ test('title 子串匹配', () => {
 
 test('匹配不到抛错并列出可选', () => {
   assert.throws(() => resolveTarget(list, 'nonexistent'), /没有找到匹配/);
+});
+
+test('setEndpointHost: 选中的数值地址在 setPort 后仍保持，IPv6 用合法 URL', () => {
+  const originalPort = PORT;
+  try {
+    setEndpointHost('::1');
+    setPort(43111);
+    assert.equal(CONNECTION_HOST, '[::1]');
+    assert.equal(BASE, 'http://[::1]:43111');
+
+    setPort(43112);
+    assert.equal(CONNECTION_HOST, '[::1]');
+    assert.equal(BASE, 'http://[::1]:43112');
+  } finally {
+    setEndpointHost(HOST);
+    setPort(originalPort);
+  }
 });
