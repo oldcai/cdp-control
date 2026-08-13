@@ -9,7 +9,7 @@
  * `node --test` 每个文件一个子进程,env 必须在**动态 import 之前**设好。
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
@@ -22,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 if (process.argv.includes('__daemon')) process.exit(0);
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// tmp/ 是 gitignored,干净 clone 上不存在;mkdtempSync 不建父目录,少这一步在 CI 会 ENOENT。
+mkdirSync(join(REPO_ROOT, 'tmp'), { recursive: true });
 const HOME = resolve(mkdtempSync(join(REPO_ROOT, 'tmp', 'cdp-endpoint-pin-')));
 
 // browser.json 的权威端口(健康 daemon 服务的就是它);env 默认是另一个值,即"未 pin 的猜测"。
