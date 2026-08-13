@@ -172,6 +172,18 @@ export function normArg(a: TargetArg): { sel?: string; ref?: number } {
 }
 
 /**
+ * 只校验、不改形态:让 CLI 能在 `await needTarget(...)` **之前**引爆防呆。
+ *
+ * 为什么需要它:实参从左到右求值,`api.click(await needTarget(...), arg, …)` 会先解析浏览器目标,
+ * 而防呆藏在 api 内部的 normArg 里。于是浏览器没起 / --target 无效时,
+ * "这是 XPath 不是 CSS"之类的指路提示被端点错误盖掉,非法命令还会白白冷启动浏览器、
+ * 甚至先装上 feedback observer。normArg 是纯函数,提前调一次只为它的抛出,重复调用无副作用。
+ */
+export function assertTargetArg(a: TargetArg): void {
+  normArg(a);
+}
+
+/**
  * 位置参数 → ref 序号。位置参数一律是 view 输出的 ref(纯数字);传别的直接抛。
  * 为什么必须抛:`Number('https://…')` 是 NaN,旧代码把它当"没传"→ 静默给整页树,
  * 模型会以为自己已经在目标页上(2026-08 实测:弱模型全程在首页打转,还以为在目标回答页)。

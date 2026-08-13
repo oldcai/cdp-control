@@ -18,7 +18,7 @@ import { cmdListen } from './monitor.ts';
 import { ensureBrowser, killBrowser } from './browser.ts';
 import { runScript } from './run-script.ts';
 import { runRecipe } from './recipe-runner.ts';
-import { parseRefArg } from './target-arg.ts';
+import { assertTargetArg, parseRefArg } from './target-arg.ts';
 import type { Target } from './transport.ts';
 
 declare const __CDP_VERSION__: string;
@@ -465,6 +465,7 @@ feedbackOpt(targetOpt(targetCmd('click', '点击元素')))
   .option('--dom', '显式使用旧 DOM 合成点击(isTrusted:false),仅作 fixed 布局逃生舱')
   .action(async (t: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
+    assertTargetArg(arg); // 必须早于 needTarget,理由见 assertTargetArg
     const r = await api.click(await needTarget(opts.target), arg, { ...feedbackCfg(opts), dom: !!opts.dom });
     printAction(`已点击: ${argLabel(arg)} (${r.tag})`, r);
     printFeedback(r.feedback);
@@ -475,6 +476,7 @@ feedbackOpt(targetOpt(targetCmd('fill', '填输入框并触发 input/change')))
   .argument('<value>', '值')
   .action(async (t: string, val: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
+    assertTargetArg(arg); // 同上
     const r = await api.fill(await needTarget(opts.target), arg, val, feedbackCfg(opts));
     printAction(`已填入: ${argLabel(arg)} ← ${val}`, r);
     printFeedback(r.feedback);
@@ -484,6 +486,7 @@ feedbackOpt(targetOpt(targetCmd('focus', '聚焦元素')))
   .argument('<target>', 'ref 序号或 selector(全数字=ref)')
   .action(async (t: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
+    assertTargetArg(arg); // 同上
     const r = await api.focus(await needTarget(opts.target), arg, feedbackCfg(opts));
     printAction(`已聚焦: ${argLabel(arg)} (${r.tag})`, r);
     printFeedback(r.feedback);
@@ -550,6 +553,7 @@ feedbackOpt(targetOpt(targetCmd('hover', '鼠标移到元素上')))
   .argument('<target>', 'ref 序号或 selector(全数字=ref)')
   .action(async (t: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
+    assertTargetArg(arg); // 同上
     const r = await api.hover(await needTarget(opts.target), arg, feedbackCfg(opts));
     printAction(`已悬停: ${argLabel(arg)}`, r);
     printFeedback(r?.feedback);
