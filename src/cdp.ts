@@ -505,9 +505,13 @@ targetCmd(
   .argument('<n>', 'view 输出的 ref 序号(穿透 shadow)')
   .option('--ancestor <k>', '按 ref 定位后向上爬 K 层父级再列(默认 0)')
   .action(async (n, opts) => {
+    // 先解析位置参数再 needTarget:实参从左到右求值,把 needTarget 写在前面会让
+    // "位置参数不是 ref" 的指路提示被端点错误盖掉(浏览器没起时尤其明显),
+    // 而且会为一条本来就非法的命令白白冷启动浏览器。view 一直是这个顺序。
+    const ref = parseRefArg(n, 'info')!;
     const r = await api.info(
       await needTarget(opts.target),
-      parseRefArg(n, 'info')!,
+      ref,
       opts.ancestor != null ? Number(opts.ancestor) : undefined,
     );
     printInfoChain(r);
@@ -517,9 +521,10 @@ targetCmd('article', '以 ref 为根提取格式友好的 Markdown 文章(保序
   .argument('<n>', 'view 输出的 ref 序号(穿透 shadow)')
   .option('--ancestor <k>', '按 ref 定位后向上爬 K 层父级再提取(默认 0)')
   .action(async (n, opts) => {
+    const ref = parseRefArg(n, 'article')!; // 同 info:必须先于 needTarget,理由见上
     const r = await api.article(
       await needTarget(opts.target),
-      parseRefArg(n, 'article')!,
+      ref,
       opts.ancestor != null ? Number(opts.ancestor) : undefined,
     );
     if (r?.refInvalid) {
