@@ -8,6 +8,7 @@
 
 ### 2026-08-13
 
+- 把 daemon 逻辑身份的「已 pin 端点」前提变成结构约束:`logs` 与其它 target 命令一样前置 `ensureBrowser()`,端点未同步到 `browser.json` 权威 port 时身份计算直接 fail closed(不探 health、不接管、不 spawn),daemon 侧显式认领父进程 pin 后传下的端点。修复首个 api 调用为 `logs` 且配置端口非 env 默认时,健康 watcher 被判 `owned-stale` 而遭误接管。
 - 增加零依赖、显式安装的 `core.hooksPath` pre-commit 快速门禁，以及从 Commander 真实注册项单向校验 agent skill CLI 命令/long flag 的 `docs:check` CI 门禁。
 - 将 `browser.json.port` 定为权威 CDP 端口：健康端点直接复用，非健康 listener 经 PID + 进程 birth identity 稳定快照、整组回收和释放确认后仍在原端口启动；不再寻找或回写漂移端口，并覆盖并发 launcher 提前退出后的延迟就绪复用。
 

@@ -9,6 +9,18 @@ export let PORT: string | number = process.env.CDP_PORT || 9222;
 export let CONNECTION_HOST = httpHost(HOST);
 export let BASE = `http://${CONNECTION_HOST}:${PORT}`;
 
+/**
+ * 端点权威标记。模块加载时的 HOST/PORT 只是 env 猜测:真正的权威端口住在 browser.json,
+ * 由 ensureBrowser 经 setPort 同步过来(daemon 子进程则认领父进程 pin 后传下的端点)。
+ * daemon 逻辑身份必须建立在已 pin 的端点上——用未 pin 的猜测端口判定身份会把服务权威端口的
+ * 健康 daemon 判成 owned-stale 并接管,所以身份计算方必须先查这里。
+ */
+let endpointPinned = false;
+
+export function isEndpointPinned(): boolean {
+  return endpointPinned;
+}
+
 function httpHost(host: string): string {
   const trimmed = host.trim();
   if (/^\[[^\]]+\]$/.test(trimmed)) return trimmed;
@@ -21,9 +33,24 @@ export function setEndpointHost(host: string): void {
   BASE = `http://${CONNECTION_HOST}:${PORT}`;
 }
 
+/** 唯一调用方是 browser.ts 的权威配置同步(有配置取 cfg.port,无配置固定 DEFAULT_PORT),故此处即 pin 点。 */
 export function setPort(p: string | number): void {
   PORT = p;
   BASE = `http://${CONNECTION_HOST}:${p}`;
+  endpointPinned = true;
+}
+
+/**
+ * daemon 子进程认领父进程 pin 之后经 env 传下的端点:`daemonChildEnvironment` 固定写入
+ * CDP_HOST/CDP_PORT,值即父进程 identity 里那对已 pin 的 host/port。缺任一项说明不是由本 CLI
+ * spawn 的 daemon,拒绝以猜测端点提供 health(否则它发布的身份会误导其它 CLI 的接管判定)。
+ */
+export function pinEndpointFromEnvironment(environment: NodeJS.ProcessEnv = process.env): void {
+  const host = environment.CDP_HOST;
+  const port = environment.CDP_PORT;
+  if (!host || !port) throw new Error('daemon 缺少父进程 pin 的 CDP_HOST/CDP_PORT,拒绝以猜测端点启动');
+  setEndpointHost(host);
+  setPort(port);
 }
 
 export interface Target {
@@ -163,8 +190,8 @@ export function send<T = unknown>(
 // /json/list 按「最近激活」排序:第一项即浏览器当前前台 tab(实测 Target.activateTarget 会把目标移到首位)。
 // 这一不变量同时支撑 list 的前台标记与 resolveTarget 的默认选择(无 match 取第一个普通网页即前台)。
 // 过滤只剔除 devtools(永不为前台),不影响哪个真 page 排首位。
-export async function listTargets(): Promise<Target[]> {
-  const all = await getJson<unknown>('/json/list');
+export async function listTargets(timeoutMs = 5000): Promise<Target[]> {
+  const all = await getJson<unknown>('/json/list', timeoutMs);
   if (!Array.isArray(all)) throw new Error('/json/list 返回值不是数组');
   return all.filter(isTarget).filter(t => t.type === 'page' && !/^devtools:\/\//.test(t.url || ''));
 }
@@ -188,9 +215,13 @@ export function resolveTarget(list: Target[], match?: string): Target {
 
 // ---- 页面级连接与执行 ----
 
-export async function pageWs(target: Target, onEvent?: (method: string, params: unknown) => void): Promise<WebSocket> {
+export async function pageWs(
+  target: Target,
+  onEvent?: (method: string, params: unknown) => void,
+  timeoutMs = 8000,
+): Promise<WebSocket> {
   if (!target.webSocketDebuggerUrl) throw new Error('该 target 没有调试地址');
-  const ws = await wsConnect(target.webSocketDebuggerUrl);
+  const ws = await wsConnect(target.webSocketDebuggerUrl, timeoutMs);
   attachDispatcher(ws, onEvent);
   return ws;
 }

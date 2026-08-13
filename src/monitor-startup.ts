@@ -3,6 +3,8 @@ export interface BoundDaemonStartup {
   bind(): Promise<void>;
   publishPid(): void;
   rollbackBind(): Promise<void>;
+  /** 仅撤销本轮刚发布的 PID authority；调用方负责 owner-safe 删除。 */
+  rollbackPid?(): void;
   syncInitialTargets(): Promise<void>;
 }
 
@@ -16,5 +18,15 @@ export async function initializeBoundDaemon(startup: BoundDaemonStartup): Promis
     } catch {}
     throw cause;
   }
-  await startup.syncInitialTargets();
+  try {
+    await startup.syncInitialTargets();
+  } catch (cause) {
+    try {
+      startup.rollbackPid?.();
+    } catch {}
+    try {
+      await startup.rollbackBind();
+    } catch {}
+    throw cause;
+  }
 }

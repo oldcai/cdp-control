@@ -50,17 +50,23 @@ logs 命令: 幂等注入(MONITOR_JS)+ 读取 window.__cdpLogs 并结构化序�
 ### daemon(`cmdListen`,注入守护)
 - `inject(target)`:attach WS → `Page.enable` → `Page.addScriptToEvaluateOnNewDocument(MONITOR_JS)`(注册给未来所有 document)→ `Runtime.evaluate(MONITOR_JS)`(立即注入当前已加载页,幂等)。
 - `sync()`:每 500ms 轮询 `/json/list`,对未 attach 的 tab 注入(覆盖手动新开)。WS 断开 → 移除,下轮重连重注册。
-- HTTP:仅 `/health`(存活探测)+ `/shutdown`。`/health` 只认精确自有 schema
-  `{ok:true,identity:{home,cdpHost,cdpPort},targets:<非负整数>}`(无额外字段),identity 由
-  `CDP_HOME` + 当前 pin 后的 CDP host + 权威 browser port 组成;PID 存当前
+- HTTP:提供冻结的 `/health` v0 compatibility view、新版 `/health/v1` 与 `/shutdown`。旧 `/health` 永久保持
+  `{ok:true,identity:{home,cdpHost,cdpPort},targets:<非负整数>}`；`/health/v1` 用稳定
+  `service: "cdp-control.monitor"` + `protocol:{major,minor}` 判别，支持同 major 的 additive fields，另发布
+  `instance:{pid,birth}` 与 `health:{phase,targets}`。identity 由
+  规范化 `CDP_HOME` + 当前 pin 后的 CDP host + 权威 browser port 组成;PID 存当前
   `CDP_HOME/cdp-listen.pid`,不与其它 home 共享状态。默认 home 继续监听 9333；自定义 `CDP_HOME` 未显式设置
   `CDP_LOGS_PORT` 时会从规范化 home 稳定派生隔离端口。
-- 兼容升级:只把精确旧 schema `{ok:true,targets:<非负整数>}`(无 identity/无额外字段) 视为旧版。退出时必须
-  同时验证旧 tmp PID file、目标 loopback listener 的唯一 PID 和当前 CLI `__daemon` 命令行，然后对该 PID
-  发信号，等 health 不可达再启动新 daemon。不向端口发 destructive HTTP；带 identity 但不匹配的
-  foreign daemon 一律拒绝。
+- 兼容升级:新版 CLI 先探测 `/health/v1`，仅明确 404 才 fallback 两种冻结 pre-v1 schema。未知 major 或本服务
+  畸形 payload 明确归为 `incompatible`，不降级、不接管；其它 service/different home 是 `foreign`。退出时必须
+  同时验证 health instance(若有)、PID file、目标 loopback listener 的唯一 PID、当前 CLI `__daemon` 命令行，
+  并在 signal 前同步双读进程 birth identity；任一证据变化都 fail closed。不向端口发 destructive HTTP。
 - 端点切换:若 identity 的规范化 home 相同、仅 CDP host/port 已过期，则用 home-scoped PID file 走同样的
   PID/listener/命令行验证后退出旧 watcher，再为当前端点启动；不同 home 仍 fail closed。
+- 生命周期:`starting/stopping` 只等待，PID 已发布且 initial sync 完成后才进入 `ready`；target attach 以最多 8 个
+  的公平批次并行且批次不重叠，initial sync 完成首批、其余由后续轮询覆盖，避免大 tab 集合制造资源风暴。
+  40s spawn-ready 窗口覆盖 process birth + list/connect/三次 CDP command 的 38s 上界。初始不可达在 spawn 前二次探测。
+  自动拉起仍不阻塞主流程，但失败以 `cdp-control monitor autostart failed:` 写 stderr，不再静默。
 
 ### `logs` 命令 / `cdp.logs` API
 - `maybeSpawnDaemon()` 确保 daemon 在跑(持续守护注入)。

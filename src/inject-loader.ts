@@ -8,8 +8,13 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-/** dist/inject 目录(相对本模块编译产物所在 dist/)。 */
-const INJECT_DIR = path.join(__dirname, 'inject');
+/**
+ * dist/inject 目录(相对本模块编译产物所在 dist/)。运行时只有 dist 的 CJS bundle,`__dirname` 恒有;
+ * 惰性取值是为了让单测能以 ESM 直接 import 本模块的上游(api/monitor)而不必先跑 build。
+ */
+function injectDir(): string {
+  return path.join(__dirname, 'inject');
+}
 
 // 缓存避免重复读盘。
 const cache = new Map<string, string>();
@@ -17,7 +22,7 @@ const cache = new Map<string, string>();
 /** 读取打包后的注入脚本源(去末尾换行)。 */
 function read(name: string): string {
   if (!cache.has(name)) {
-    cache.set(name, readFileSync(path.join(INJECT_DIR, `${name}.js`), 'utf8').trim());
+    cache.set(name, readFileSync(path.join(injectDir(), `${name}.js`), 'utf8').trim());
   }
   return cache.get(name)!;
 }

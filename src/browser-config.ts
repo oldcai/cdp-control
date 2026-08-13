@@ -3,7 +3,7 @@
  * 语义:缺失则生成 / 存在则用 / 损坏抛清晰错误(调用方警告、不兜底) / 用户可改。
  */
 import { join } from 'node:path';
-import type { BrowserKind } from './browser-discover';
+import type { BrowserKind } from './browser-discover.ts';
 import { cdpHome, type CdpEnvironment } from './paths.ts';
 
 export interface BrowserConfig {

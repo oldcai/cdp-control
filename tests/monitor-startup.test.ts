@@ -50,3 +50,24 @@ test('initializeBoundDaemon: PID 发布失败会关闭已绑定 listener，保�
 
   assert.deepEqual(calls, ['bound', 'publish failed', 'listener closed']);
 });
+
+test('initializeBoundDaemon: initial sync 失败会撤销 PID 并关闭 listener，不能宣称 ready', async () => {
+  const calls: string[] = [];
+  const syncError = new Error('CDP unavailable');
+
+  await assert.rejects(
+    initializeBoundDaemon({
+      bind: async () => calls.push('bound'),
+      publishPid: () => calls.push('pid published'),
+      rollbackBind: async () => calls.push('listener closed'),
+      rollbackPid: () => calls.push('pid removed'),
+      syncInitialTargets: async () => {
+        calls.push('sync failed');
+        throw syncError;
+      },
+    }),
+    error => error === syncError,
+  );
+
+  assert.deepEqual(calls, ['bound', 'pid published', 'sync failed', 'pid removed', 'listener closed']);
+});
