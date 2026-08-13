@@ -90,7 +90,19 @@ test('selectorDialect: XPath 的其余根形态也要拦(绝对/相对/引擎前
   assert.match(String(selectorDialect('./div')), /XPath/);
   assert.match(String(selectorDialect('xpath=//button')), /XPath/); // 引擎前缀
   assert.match(String(selectorDialect('XPath = //button')), /XPath/);
+  assert.match(String(selectorDialect('../button')), /XPath/); // 父轴
+  assert.match(String(selectorDialect('(//button)[1]')), /XPath/); // 带位置过滤
+  assert.match(String(selectorDialect('(.//button)[1]')), /XPath/);
   assert.throws(() => normArg('.//button'), /XPath/);
+});
+
+test('selectorDialect: Playwright 显式引擎前缀也要认(不只 text=)', () => {
+  assert.match(String(selectorDialect('css=button')), /Playwright/);
+  assert.match(String(selectorDialect('id=submit')), /Playwright/);
+  assert.match(String(selectorDialect('data-testid=save')), /Playwright/);
+  assert.match(String(selectorDialect('role=button')), /Playwright/);
+  // xpath= 必须仍报 XPath 而不是被通用前缀抢走
+  assert.match(String(selectorDialect('xpath=//button')), /XPath/);
 });
 
 test('selectorDialect: 但以 / 或 . 开头的合法 CSS 不能被上一条误伤', () => {
@@ -105,6 +117,12 @@ test('selectorDialect: 但以 / 或 . 开头的合法 CSS 不能被上一条误�
   // `text` 是合法 SVG 元素名,只有紧跟 `=` 才算 Playwright
   assert.equal(selectorDialect('text'), null);
   assert.equal(selectorDialect('svg text[x="1"]'), null);
+  // 通用引擎前缀只认「串首标识符紧跟 =」;属性判等写在 [] 里的合法 CSS 不受影响
+  assert.equal(selectorDialect('div[data-x=y]'), null);
+  assert.equal(selectorDialect('input[type=checkbox]:checked'), null);
+  assert.equal(selectorDialect('a[href^="/x"] > span'), null);
+  // 父轴形态不能误伤普通类选择器
+  assert.equal(selectorDialect('.foo.bar'), null);
 });
 
 test('normArg: `>>>` 是本工具自己的 shadow 链,要给对诊断而不是"像 Playwright"', () => {

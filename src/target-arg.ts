@@ -25,15 +25,18 @@ const RE_URL = /^(https?:\/\/|\/\/[\w-]+(\.[\w-]+)+([/?#]|$))/i;
  * 放到掩码后判会把 XPath 漏掉。合法 CSS selector 不可能以这些形状开头,所以原串判是安全的。
  */
 const SHAPES: Array<[RegExp, string]> = [
-  // XPath 路径:绝对 `/html/body/div`、`//div[…]`,相对 `./div`、`.//button`。
+  // XPath 路径根:绝对 `/html/body/div`、`//div[…]`;相对 `./div`、`.//button`、`../button`;
+  // 带位置过滤的 `(//button)[1]`、`(.//button)[1]`。
   // 两个必须放行的合法 CSS 长得很像,都靠这条正则的细节挡住:
   //  - `/* c */ div` —— 注释可以打头,故 `(?!\*)` 排除 `/*`;
   //  - `.\/foo`      —— 类名真叫 `/foo`,`.` 后面是 `\` 不是 `/`,天然不匹配。
-  [/^\s*\.?\/(?!\*)/, 'XPath'],
-  // 引擎前缀写法:Selenium/Playwright 的 `xpath=//button`。
+  [/^\s*\(*\s*\.{0,2}\/(?!\*)/, 'XPath'],
+  // `xpath=` 要排在下面的通用引擎前缀之前,否则会被报成 Playwright 而不是 XPath。
   [/^\s*xpath\s*=/i, 'XPath'],
-  // Playwright 文本引擎。注意 `text` 是合法 SVG 元素名,故必须要求紧跟 `=` 才算方言。
-  [/^\s*text\s*=/i, 'Playwright'],
+  // Playwright 显式引擎前缀:`text=登录`、`css=button`、`id=submit`、`data-testid=save`、`role=…`。
+  // 合法 CSS selector 不可能以「标识符 =」开头(属性判等要写在 `[]` 里),所以这条前缀判是安全的:
+  // `svg text[x="1"]`(`text` 是合法 SVG 元素名)、`div[data-x=y]` 都不匹配 —— 标识符后面不是 `=`。
+  [/^\s*[\w-]+\s*=/, 'Playwright'],
 ];
 /**
  * token 类方言:XPath 与 Playwright/uBlock 写法。querySelector 只吃 CSS,原样丢进去只会抛裸 SyntaxError。

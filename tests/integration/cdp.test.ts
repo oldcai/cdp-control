@@ -265,7 +265,9 @@ return await cdp.click(target, { ref: ${recoveryRef} }, { noFeedback: true });
           'div/* >>> */ span',
           '.a\\\\>\\\\>b',
           '/* c */ div',
-          '.\\\\/foo'
+          '.\\\\/foo',
+          'div[data-x=y]',
+          'svg text[x="1"]'
         ];
         return sels.filter(s => { try { document.querySelector(s); return false; } catch { return true; } });
       })()`;
