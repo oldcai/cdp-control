@@ -22,11 +22,14 @@ export function findTarget(arg: OperableArg): Element | null {
     return climbAncestors(refElement(arg.ref), arg.ancestor || 0);
   }
   if (!arg.sel) return null;
-  try { return document.querySelector(arg.sel); }
-  catch {
+  try {
+    return document.querySelector(arg.sel);
+  } catch {
     // querySelector 抛的是裸 SyntaxError + 内部栈,agent 看不懂会原地重发同一条命令(实测连发 3 次)。
     // 换成"哪错了 + 下一步怎么做"。
-    throw new Error(`selector 非法,只支持 CSS(不支持 XPath / :has-text() 等方言): ${arg.sel}\n按文本找元素用 find --text "<关键词>",拿到 ref 再操作`);
+    throw new Error(
+      `selector 非法,只支持 CSS(不支持 XPath / :has-text() 等方言): ${arg.sel}\n按文本找元素用 find --text "<关键词>",拿到 ref 再操作`,
+    );
   }
 }
 
