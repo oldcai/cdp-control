@@ -8,6 +8,7 @@
 
 ### 2026-08-13
 
+- 给 CLI 加三道防呆,把弱模型实测踩过的用法从"静默走偏 / 裸 SyntaxError"换成"哪错了 + 下一步怎么做":位置参数只吃 view 输出的 ref 序号(旧代码 `Number('https://…')` 得 NaN 会当没传、静默给整页树)、URL 不当 selector、XPath/Playwright 方言给出是哪种方言并指向 `find --text`。方言探测只在掩掉 CSS 字符串字面量与转义后的残留串上匹配,`input[value="text()"]`、`a[href*="contains("]`、`[aria-label="a >> b"]` 等合法 CSS 照常放行;本工具自己的 `>>>` shadow 链单独认领,提示改用 `find --selector` 拿 ref,不再被误诊成 Playwright 写法。
 - 把 daemon 逻辑身份的「已 pin 端点」前提变成结构约束:`logs` 与其它 target 命令一样前置 `ensureBrowser()`,端点未同步到 `browser.json` 权威 port 时身份计算直接 fail closed(不探 health、不接管、不 spawn),daemon 侧显式认领父进程 pin 后传下的端点。修复首个 api 调用为 `logs` 且配置端口非 env 默认时,健康 watcher 被判 `owned-stale` 而遭误接管。
 - 增加零依赖、显式安装的 `core.hooksPath` pre-commit 快速门禁，以及从 Commander 真实注册项单向校验 agent skill CLI 命令/long flag 的 `docs:check` CI 门禁。
 - 将 `browser.json.port` 定为权威 CDP 端口：健康端点直接复用，非健康 listener 经 PID + 进程 birth identity 稳定快照、整组回收和释放确认后仍在原端口启动；不再寻找或回写漂移端口，并覆盖并发 launcher 提前退出后的延迟就绪复用。

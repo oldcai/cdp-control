@@ -18,6 +18,8 @@ import { cmdListen } from './monitor.ts';
 import { ensureBrowser, killBrowser } from './browser.ts';
 import { runScript } from './run-script.ts';
 import { runRecipe } from './recipe-runner.ts';
+import { parseKeySpec } from './keys.ts';
+import { assertTargetArg, parseRefArg } from './target-arg.ts';
 import type { Target } from './transport.ts';
 
 declare const __CDP_VERSION__: string;
@@ -248,7 +250,7 @@ targetCmd(
   .option('--focus <ref>', '整页骨架全折,只展开指定既有 ref 的子树(必须与 --budget 配合)')
   .action(async (n, opts) => {
     const sel = readOptFile(opts.selectorFile);
-    const ref = n != null ? Number(n) : undefined;
+    const ref = parseRefArg(n, 'view');
     const focus = opts.focus != null ? Number(opts.focus) : undefined;
     if (ref != null && sel) throw new Error('ref 序号与 --selector-file 只能选其一');
     if (focus != null && (ref != null || sel)) throw new Error('--focus 与位置 ref / --selector-file 不能同时使用');
@@ -464,6 +466,7 @@ feedbackOpt(targetOpt(targetCmd('click', '点击元素')))
   .option('--dom', '显式使用旧 DOM 合成点击(isTrusted:false),仅作 fixed 布局逃生舱')
   .action(async (t: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
+    assertTargetArg(arg); // 必须早于 needTarget,理由见 assertTargetArg
     const r = await api.click(await needTarget(opts.target), arg, { ...feedbackCfg(opts), dom: !!opts.dom });
     printAction(`已点击: ${argLabel(arg)} (${r.tag})`, r);
     printFeedback(r.feedback);
@@ -474,6 +477,7 @@ feedbackOpt(targetOpt(targetCmd('fill', '填输入框并触发 input/change')))
   .argument('<value>', '值')
   .action(async (t: string, val: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
+    assertTargetArg(arg); // 同上
     const r = await api.fill(await needTarget(opts.target), arg, val, feedbackCfg(opts));
     printAction(`已填入: ${argLabel(arg)} ← ${val}`, r);
     printFeedback(r.feedback);
@@ -483,6 +487,7 @@ feedbackOpt(targetOpt(targetCmd('focus', '聚焦元素')))
   .argument('<target>', 'ref 序号或 selector(全数字=ref)')
   .action(async (t: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
+    assertTargetArg(arg); // 同上
     const r = await api.focus(await needTarget(opts.target), arg, feedbackCfg(opts));
     printAction(`已聚焦: ${argLabel(arg)} (${r.tag})`, r);
     printFeedback(r.feedback);
@@ -504,9 +509,13 @@ targetCmd(
   .argument('<n>', 'view 输出的 ref 序号(穿透 shadow)')
   .option('--ancestor <k>', '按 ref 定位后向上爬 K 层父级再列(默认 0)')
   .action(async (n, opts) => {
+    // 先解析位置参数再 needTarget:实参从左到右求值,把 needTarget 写在前面会让
+    // "位置参数不是 ref" 的指路提示被端点错误盖掉(浏览器没起时尤其明显),
+    // 而且会为一条本来就非法的命令白白冷启动浏览器。view 一直是这个顺序。
+    const ref = parseRefArg(n, 'info')!;
     const r = await api.info(
       await needTarget(opts.target),
-      Number(n),
+      ref,
       opts.ancestor != null ? Number(opts.ancestor) : undefined,
     );
     printInfoChain(r);
@@ -516,9 +525,10 @@ targetCmd('article', '以 ref 为根提取格式友好的 Markdown 文章(保序
   .argument('<n>', 'view 输出的 ref 序号(穿透 shadow)')
   .option('--ancestor <k>', '按 ref 定位后向上爬 K 层父级再提取(默认 0)')
   .action(async (n, opts) => {
+    const ref = parseRefArg(n, 'article')!; // 同 info:必须先于 needTarget,理由见上
     const r = await api.article(
       await needTarget(opts.target),
-      Number(n),
+      ref,
       opts.ancestor != null ? Number(opts.ancestor) : undefined,
     );
     if (r?.refInvalid) {
@@ -535,6 +545,7 @@ targetCmd('article', '以 ref 为根提取格式友好的 Markdown 文章(保序
 feedbackOpt(targetCmd('press-key', '按键/组合键,如 Enter、Ctrl+Shift+A、Tab'))
   .argument('<key>', '按键')
   .action(async (key: string, opts: CliOptions) => {
+    parseKeySpec(key); // 同 assertTargetArg:按键拼写错误要先于 needTarget 报出来,别被端点错误盖掉
     const r = await api.pressKey(await needTarget(opts.target), key, feedbackCfg(opts));
     console.log(`已按键: ${key}`);
     printFeedback(r?.feedback);
@@ -544,6 +555,7 @@ feedbackOpt(targetOpt(targetCmd('hover', '鼠标移到元素上')))
   .argument('<target>', 'ref 序号或 selector(全数字=ref)')
   .action(async (t: string, opts: CliOptions) => {
     const arg = normTarget(t, opts.ancestor);
+    assertTargetArg(arg); // 同上
     const r = await api.hover(await needTarget(opts.target), arg, feedbackCfg(opts));
     printAction(`已悬停: ${argLabel(arg)}`, r);
     printFeedback(r?.feedback);
@@ -583,6 +595,10 @@ targetCmd('logs', '读 target 控制台日志(常驻 daemon,支持过滤)')
       console.log(`[${ts}][${e.level}] ${argsText}${loc}`);
     }
   });
+
+// 多余的位置参数一律报错(commander 12 默认是静默丢掉)。实测:弱模型爱写
+// `view <url>` / `click <sel> <url>`,被静默吞掉后它以为自己已经在目标页上,后面全盘错。
+for (const c of program.commands) c.allowExcessArguments(false);
 
 if (require.main === module) {
   program.parseAsync(process.argv).catch((error: unknown) => {
