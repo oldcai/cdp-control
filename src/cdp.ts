@@ -13,12 +13,12 @@ import {
   type InfoResult,
   type RefAwareResult,
   type ViewOpts,
-} from './api';
-import { logs, cmdListen } from './monitor';
-import { ensureBrowser, killBrowser } from './browser';
-import { runScript } from './run-script';
-import { runRecipe } from './recipe-runner';
-import type { Target } from './transport';
+} from './api.ts';
+import { cmdListen } from './monitor.ts';
+import { ensureBrowser, killBrowser } from './browser.ts';
+import { runScript } from './run-script.ts';
+import { runRecipe } from './recipe-runner.ts';
+import type { Target } from './transport.ts';
 
 declare const __CDP_VERSION__: string;
 
@@ -27,7 +27,8 @@ async function recipe(target: Target, opts: unknown): Promise<{ lines: string[] 
   return runRecipe(target.url, api, target, opts);
 }
 
-const api = { ...coreApi, logs, ensure: ensureBrowser, kill: killBrowser, recipe };
+// logs 住在 coreApi(与其它命令共用 ensureBrowser 前置);这里只补 api 层拿不到的 ensure/kill/recipe。
+const api = { ...coreApi, ensure: ensureBrowser, kill: killBrowser, recipe };
 
 interface DispatchOptions extends ViewOpts {
   tree?: boolean;

@@ -4,8 +4,20 @@
  */
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { pageWs, send, listTargets, resolve, evaluate, sleep, CONNECTION_HOST, PORT, Target } from './transport';
-import { inject, readExpr } from './inject-loader';
+import {
+  pageWs,
+  send,
+  listTargets,
+  resolve,
+  evaluate,
+  sleep,
+  isEndpointPinned,
+  pinEndpointFromEnvironment,
+  CONNECTION_HOST,
+  PORT,
+  type Target,
+} from './transport.ts';
+import { inject, readExpr } from './inject-loader.ts';
 import { cdpHome, cdpLogsPort, cdpNoAutostart } from './paths.ts';
 import {
   daemonHealthPayloads,
@@ -20,7 +32,7 @@ import {
 import { daemonChildEnvironment } from './monitor-endpoint.ts';
 import { runMonitorAutostart } from './monitor-diagnostics.ts';
 import { AttachmentRegistry } from './monitor-attachments.ts';
-import { legacyDaemonPidFilePath, retireDaemonProcess } from './monitor-process';
+import { legacyDaemonPidFilePath, retireDaemonProcess } from './monitor-process.ts';
 import { initializeBoundDaemon } from './monitor-startup.ts';
 import { processBirthIdentity } from './process-identity.ts';
 import { spawnDetachedDaemon } from './monitor-spawn.ts';
@@ -51,7 +63,17 @@ function daemonScriptPath(): string {
   return process.argv[1] || __filename;
 }
 
-function currentDaemonIdentity(): DaemonIdentity {
+/** 未 pin 端点时拒绝计算身份的稳定前缀；autostart 诊断按此断言。 */
+export const UNPINNED_ENDPOINT_ERROR = 'CDP 端点尚未 pin 到权威配置';
+
+/**
+ * 逻辑身份 = 规范化 home + **已 pin 的 host** + **权威 port**。transport 的 HOST/PORT 在 ensureBrowser
+ * 同步 browser.json 之前只是 env 猜测,用它算身份会把服务权威端口(如 9223)的健康 daemon 判成
+ * 同 home 异 endpoint 的 owned-stale,而五重接管门禁全部为真(它确实是我们的 daemon,只是判错了谁 stale)
+ * → SIGTERM 杀掉健康 watcher。身份是破坏性动作的前提,所以未 pin 一律 fail closed,宁可不发生。
+ */
+export function currentDaemonIdentity(): DaemonIdentity {
+  if (!isEndpointPinned()) throw new Error(`${UNPINNED_ENDPOINT_ERROR},拒绝在未确定 endpoint 时判定 daemon 身份`);
   return daemonIdentity(process.env, undefined, CONNECTION_HOST, PORT);
 }
 
@@ -114,6 +136,9 @@ async function attachInject(ws: WebSocket): Promise<void> {
  * 轮询 /json/list 自动覆盖新开的 tab(含手动开的)。读取交给 logs 命令去 eval 页面 window.__cdpLogs。
  */
 export async function cmdListen(): Promise<never> {
+  // daemon 不跑 ensureBrowser(monitor 与 browser 同层,不得反向依赖),端点权威由父进程 pin 后
+  // 经 env 传下;这里显式认领,让「身份只建立在已 pin 端点上」在 daemon 侧同样成立。
+  pinEndpointFromEnvironment();
   const identity = currentDaemonIdentity();
   const instance = { pid: process.pid, birth: processBirthIdentity(process.pid) };
   let phase: DaemonPhase = 'starting';
@@ -228,6 +253,8 @@ function isLogEntry(value: unknown): value is LogEntry {
  * 读 target 的控制台日志:幂等注入监控脚本 + 读取 window.__cdpLogs(结构化嵌套对象)。
  */
 export async function logs(target: Target | string, opts: LogsOpts = {}): Promise<LogEntry[]> {
+  // 调用方(api.logs)必须已 ensureBrowser 把端点 pin 到权威 port,否则这里会以未 pin 的猜测端口判定
+  // daemon 身份。诊断由 runMonitorAutostart 内部以稳定前缀写 stderr,此处 catch 仅防 unhandled rejection。
   maybeSpawnDaemon().catch(() => {});
   if (typeof target === 'string') target = await resolve(target);
   const levelSet = opts.level

@@ -1,11 +1,11 @@
 /**
  * api.ts — 高层页面操作 API(CLI 与 run 脚本共用)。
- * 依赖 transport(连接)+ inject-loader(注入脚本装配)+ monitor(maybeSpawnDaemon)。
- * 不包含 logs/ensure(分别在 monitor/browser),由 cdp.ts 入口组装为最终 api 对象。
+ * 依赖 transport(连接)+ inject-loader(注入脚本装配)+ monitor(logs/maybeSpawnDaemon)。
+ * 不包含 ensure/kill/recipe(在 browser/recipe-runner),由 cdp.ts 入口组装为最终 api 对象。
  */
 import { writeFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
-import { pageWs, browserWs, send, evalJs, evaluate, resolve, list, sleep, Target } from './transport';
+import { pageWs, browserWs, send, evalJs, evaluate, resolve, list, sleep, type Target } from './transport.ts';
 import {
   inject,
   viewExpr,
@@ -15,15 +15,15 @@ import {
   findExpr,
   articleExpr,
   readContentExpr,
-} from './inject-loader';
-import { parseKeySpec } from './keys';
-import { maybeSpawnDaemon, injectMonitor } from './monitor';
-import { matchFolds, hostOf, pathOf, loadFolds } from './folds';
-import { loadLinkRules } from './ignore-links';
-import { normArg, type TargetArg } from './target-arg';
-import { diffTabs } from './tab-diff';
-import { ensureBrowser } from './browser';
-import { mouseClickEvents } from './click-events';
+} from './inject-loader.ts';
+import { parseKeySpec } from './keys.ts';
+import { maybeSpawnDaemon, injectMonitor, logs as monitorLogs, type LogEntry, type LogsOpts } from './monitor.ts';
+import { matchFolds, hostOf, pathOf, loadFolds } from './folds.ts';
+import { loadLinkRules } from './ignore-links.ts';
+import { normArg, type TargetArg } from './target-arg.ts';
+import { diffTabs } from './tab-diff.ts';
+import { ensureBrowser } from './browser.ts';
+import { mouseClickEvents } from './click-events.ts';
 
 export type RecoveredResult =
   | { never: true; maxRef: number; msg: string }
@@ -165,12 +165,22 @@ export async function open(url = 'about:blank'): Promise<string> {
     const r = await send<{ targetId: string }>(ws, 'Target.createTarget', { url, newWindow: false });
     return { targetId: r.targetId };
   });
-  maybeSpawnDaemon();
+  maybeSpawnDaemon(); // 诊断已由 runMonitorAutostart 内部写 stderr;该 promise 不 reject,故此处无需 catch。
   try {
     const t = await resolve(targetId);
     await injectMonitor(t);
   } catch {}
   return targetId;
+}
+
+/**
+ * 读 target 控制台日志。与其它 target 命令一样前置 ensureBrowser——它把 transport 端点同步到
+ * browser.json 的权威 port(pin),daemon 逻辑身份才成立。缺这一步时,run 脚本以 `cdp.logs()` 作为
+ * 第一个调用就会用未 pin 的 env 默认端口判定身份,把服务权威端口的健康 daemon 判成 owned-stale 并接管。
+ */
+async function logs(target: Target | string, opts: LogsOpts = {}): Promise<LogEntry[]> {
+  await ensureBrowser();
+  return monitorLogs(target, opts);
 }
 
 /** 关闭 target。 */
@@ -364,7 +374,7 @@ export async function fold(target: Target, opts: FoldOpts = {}): Promise<FoldRes
 }
 
 /** 操作目标类型 TargetArg 与归一化函数 normArg(含 {ref:N} 误用防呆)抽在 src/target-arg.ts,纯函数零依赖可单测。 */
-export type { TargetArg } from './target-arg';
+export type { TargetArg } from './target-arg.ts';
 
 // —— 操作后自动反馈(opts + tab diff)——
 
@@ -629,8 +639,9 @@ export async function hover(
   );
 }
 
-// 核心 api 对象(不含 logs/ensure,入口 cdp.ts 组装补全)。
-// resolve/list 前置 ensureBrowser:覆盖所有 target 命令(经 needTarget→resolve)与 list,让"一切命令"自愈。
+// 核心 api 对象(不含 ensure/kill/recipe,入口 cdp.ts 组装补全)。
+// resolve/list/logs 前置 ensureBrowser:覆盖所有 target 命令(经 needTarget→resolve)、list 与 logs,
+// 让"一切命令"自愈。logs 曾经绕过 api 层直接挂在入口上,因而漏掉这层前置 → 端点未 pin 就判 daemon 身份。
 const coreApi = {
   list: async () => {
     await ensureBrowser();
@@ -644,6 +655,7 @@ const coreApi = {
   close,
   activate,
   navigate,
+  logs,
   eval: evaluate,
   view,
   locate,
