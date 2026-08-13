@@ -78,17 +78,23 @@ function stripCssLiterals(sel: string): string {
   let quote: '"' | "'" | null = null;
   for (let i = 0; i < sel.length; i++) {
     const c = sel[i];
-    // CSS 转义:`.a\>\>b` 的类名真叫 `a>>b`;`\x` 是把 x 当类型选择器写。
-    if (c === '\\') {
-      out += MASK;
-      i++;
-      continue;
-    }
     if (quote) {
+      // 串内转义(`"x\"y"`):整对都是数据,一并丢掉 —— 关键是别让 \" 提前闭合引号。
+      if (c === '\\') {
+        i++;
+        continue;
+      }
       if (c === quote) {
         out += c;
         quote = null;
       }
+      continue;
+    }
+    // 串外 CSS 转义:`.a\>\>b` 的类名真叫 `a>>b`;`\x` 是把 x 当类型选择器写。
+    // 这里必须留占位符 —— 删掉会让两侧 token 贴到一起(见上方不变量 1)。
+    if (c === '\\') {
+      out += MASK;
+      i++;
       continue;
     }
     if (c === '"' || c === "'") {

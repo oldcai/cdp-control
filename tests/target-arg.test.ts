@@ -59,6 +59,10 @@ test('selectorDialect: 掩码要换占位符而不是删掉,否则两侧 token �
   assert.deepEqual(normArg('div >\\x> span'), { sel: 'div >\\x> span' });
   // 类名真叫 a>>b 的写法同理
   assert.equal(selectorDialect('.a\\>\\>b'), null);
+  // 串内转义不能让 \" 提前闭合引号 —— 否则后面的内容会被当成语法位置
+  assert.equal(selectorDialect('a[href="x\\"y"]'), null);
+  assert.equal(selectorDialect('a[href="x\\">> "]'), null);
+  assert.equal(selectorDialect("a[href='it\\'s >> x']"), null);
 });
 
 test('selectorDialect: CSS 注释是被 tokenizer 丢掉的文本,不是语法', () => {
