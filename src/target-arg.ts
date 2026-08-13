@@ -25,9 +25,52 @@ const DIALECTS: Array<[RegExp, string]> = [
   [/:has-text\(|:text\(|>>|^text=/i, 'Playwright'],
 ];
 
-/** 命中别的定位方言就报出"是哪种方言 + 该怎么写",否则返回 null。纯函数,单测覆盖。 */
+/**
+ * 掩掉 CSS 字符串字面量的内容与转义序列,只留"结构位置"的 token,供方言判定使用。
+ *
+ * 为什么必须掩码:`input[value="text()"]`、`a[href*="contains("]`、`[aria-label="a >> b"]`
+ * 都是合法 CSS,方言 token 只是属性值里的**数据**。直接拿未掩码的串做正则匹配,
+ * 这些选择器会在到达 querySelector 之前就被防呆拒掉(2026-08 实测回归)。
+ *
+ * 只删不增:引号分隔符本身保留,残留串里它仍是非词字符,`\b` 语义不变 ——
+ * 所以紧贴引号的真方言(`//*[@class="a" and contains(text(),"b")]`)不会因掩码丢掉边界。
+ * 引号未闭合时其后整体按字符串吞掉:这种半截串本就不是合法 CSS,
+ * 由注入侧 findTarget 的 querySelector catch 报"只支持 CSS",防呆不落空。
+ */
+function stripCssLiterals(sel: string): string {
+  let out = '';
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < sel.length; i++) {
+    const c = sel[i];
+    // CSS 转义(如类名真叫 `a>>b` 时写作 `.a\>\>b`):反斜杠与被转义字符都是字面量。
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (c === quote) {
+        out += c;
+        quote = null;
+      }
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      out += c;
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * 命中别的定位方言就报出"是哪种方言 + 该怎么写",否则返回 null。纯函数,单测覆盖。
+ * 判定跑在 stripCssLiterals 的残留串上,只看语法位置的 token,不看属性值里的数据。
+ */
 export function selectorDialect(sel: string): string | null {
-  for (const [re, name] of DIALECTS) if (re.test(sel)) return name;
+  const bare = stripCssLiterals(sel);
+  for (const [re, name] of DIALECTS) if (re.test(bare)) return name;
   return null;
 }
 
@@ -46,11 +89,15 @@ export function normArg(a: TargetArg): { sel?: string; ref?: number } {
     // 顺序有讲究:`//x` 既可能是协议相对 URL 也可能是 XPath。RE_URL 要求 `//` 后面是带点的域名,
     // 先判它 → `//example.com/x` 归 URL、`//div[@id=x]` 落到下面的方言判定。
     if (RE_URL.test(a.trim())) {
-      throw new Error(`操作目标是 ref 序号或 CSS selector,不是网址: ${a}\n打开网页用 cdp-control open <url>(或 navigate),再 view 拿 ref 去操作`);
+      throw new Error(
+        `操作目标是 ref 序号或 CSS selector,不是网址: ${a}\n打开网页用 cdp-control open <url>(或 navigate),再 view 拿 ref 去操作`,
+      );
     }
     const d = selectorDialect(a);
     if (d) {
-      throw new Error(`selector 只支持 CSS,这条像是 ${d} 写法: ${a}\n按文本找元素用 cdp-control find --text "<关键词>",拿到 ref 再操作`);
+      throw new Error(
+        `selector 只支持 CSS,这条像是 ${d} 写法: ${a}\n按文本找元素用 cdp-control find --text "<关键词>",拿到 ref 再操作`,
+      );
     }
   }
   return typeof a === 'string' ? { sel: a } : a;
@@ -66,7 +113,9 @@ export function parseRefArg(n: string | number | undefined, cmd = 'view'): numbe
   const s = String(n).trim();
   if (/^\d+$/.test(s)) return Number(s);
   if (RE_URL.test(s)) {
-    throw new Error(`${cmd} 的位置参数是 view 输出的 ref 序号(纯数字),不是网址: ${s}\n打开网页: cdp-control open <url>;看已打开的页面: cdp-control ${cmd} --target <url或title子串>`);
+    throw new Error(
+      `${cmd} 的位置参数是 view 输出的 ref 序号(纯数字),不是网址: ${s}\n打开网页: cdp-control open <url>;看已打开的页面: cdp-control ${cmd} --target <url或title子串>`,
+    );
   }
   throw new Error(`${cmd} 的位置参数是 view 输出的 ref 序号(纯数字),收到: ${s}`);
 }
