@@ -22,6 +22,15 @@ import {
   type DaemonIdentity,
 } from '../src/monitor-health.ts';
 
+/**
+ * 端口占用探测的注入桩:fetch 抛错后 classifyRequestFailure 默认会对 127.0.0.1:19333 打真实 TCP,
+ * 本机该端口恰被占用时 unreachable 会被误判成 foreign,用例假红。凡是让 fetch 失败的 fixture 都注入它。
+ */
+const portFree = async (): Promise<boolean> => false;
+
+/** probeDaemonHealth 的 requestTimeoutMs 默认值;只为把 listenerOccupiedImpl 传到第 5 位。 */
+const DEFAULT_REQUEST_TIMEOUT_MS = 2000;
+
 interface VersionedHealthOptions {
   identity?: DaemonIdentity;
   major?: number;
@@ -102,7 +111,10 @@ test('probeDaemonHealth: 区分 current、legacy、foreign 与 unreachable', asy
   assert.equal(await probeDaemonHealth(19333, expected, legacyFetch), 'legacy');
   assert.equal(await probeDaemonHealth(19333, expected, ambiguousFetch), 'foreign');
   assert.equal(await probeDaemonHealth(19333, expected, healthFetch(foreign)), 'foreign');
-  assert.equal(await probeDaemonHealth(19333, expected, unreachableFetch), 'unreachable');
+  assert.equal(
+    await probeDaemonHealth(19333, expected, unreachableFetch, DEFAULT_REQUEST_TIMEOUT_MS, portFree),
+    'unreachable',
+  );
   assert.equal(await daemonHealthy(19333, expected, legacyFetch), false);
 });
 
@@ -120,7 +132,7 @@ test('probeDaemonHealth: 单次 health request 有界，超时分类为 unreacha
     return response;
   };
   const started = Date.now();
-  assert.equal(await probeDaemonHealth(19333, expected, hangingFetch, 10), 'unreachable');
+  assert.equal(await probeDaemonHealth(19333, expected, hangingFetch, 10, portFree), 'unreachable');
   assert.equal(await probeDaemonHealth(19333, expected, hangingBodyFetch, 10), 'foreign');
   assert.ok(Date.now() - started < 1000, 'health probe 必须在注入 timeout 后返回');
 });
@@ -482,6 +494,7 @@ test('ensureDaemonReady: v1 owned-stale 将同一 health instance 传到接管�
       if (phase === 'stopped') throw new TypeError('connection refused');
       return new Response(JSON.stringify(phase === 'current' ? versionedHealth(expected) : stalePayload));
     },
+    listenerOccupiedImpl: portFree,
     pollAttempts: 1,
     pollIntervalMs: 5,
     retireDaemonImpl: async candidate => {
@@ -527,6 +540,7 @@ test('ensureDaemonReady: initial unreachable 在 spawn 前复探并复用并发 
       if (probes === 1) throw new TypeError('connection refused');
       return new Response(JSON.stringify(versionedHealth(expected)));
     },
+    listenerOccupiedImpl: portFree,
     pollAttempts: 1,
     retireDaemonImpl: async () => calls.push('retire'),
     sleepImpl: async () => calls.push('sleep'),
@@ -698,6 +712,7 @@ test('ensureDaemonReady: legacy 先退出已验证 PID 并等 health 消失,再 
 
   await ensureDaemonReady(19333, expected, {
     fetchImpl: fakeFetch,
+    listenerOccupiedImpl: portFree,
     pollAttempts: 2,
     pollIntervalMs: 25,
     retireDaemonImpl: async () => {
@@ -787,6 +802,7 @@ test('ensureDaemonReady: 同 home 旧 endpoint daemon 退出后启动 current wa
 
   await ensureDaemonReady(19333, expected, {
     fetchImpl: fakeFetch,
+    listenerOccupiedImpl: portFree,
     pollAttempts: 2,
     pollIntervalMs: 1,
     retireDaemonImpl: async candidate => {
