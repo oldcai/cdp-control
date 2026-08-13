@@ -19,10 +19,22 @@ const RE_REF_LITERAL = /^\{[\s\S]*ref[\s\S]*\}$/;
  * 协议相对写法(`//host/path`)要求首段像域名 —— 否则会误伤 XPath 的 `//div[@id=x]`。
  */
 const RE_URL = /^(https?:\/\/|\/\/[\w-]+(\.[\w-]+)+([/?#]|$))/i;
-/** 别的定位方言:XPath 与 Playwright/uBlock 写法。querySelector 只吃 CSS,原样丢进去只会抛裸 SyntaxError。 */
+/**
+ * 整串形状类方言:锚在串首,判的是"这条压根不是 CSS",不是某个 token。
+ * 必须看**原串** —— 掩码会动串首(`//*[…]` 的 `/*` 长得像 CSS 注释开头),
+ * 放到掩码后判会把 XPath 漏掉。合法 CSS selector 不可能以 `//` 或 `text=` 开头,所以原串判是安全的。
+ */
+const SHAPES: Array<[RegExp, string]> = [
+  [/^\s*\/\//, 'XPath'],
+  [/^\s*text=/i, 'Playwright'],
+];
+/**
+ * token 类方言:XPath 与 Playwright/uBlock 写法。querySelector 只吃 CSS,原样丢进去只会抛裸 SyntaxError。
+ * 这些判在掩码后的残留串上 —— 引号/注释里的同名字样是数据,不是语法。
+ */
 const DIALECTS: Array<[RegExp, string]> = [
-  [/\bcontains\s*\(|\btext\s*\(\s*\)|^\s*\/\/|@class\b/, 'XPath'],
-  [/:has-text\(|:text\(|>>|^text=/i, 'Playwright'],
+  [/\bcontains\s*\(|\btext\s*\(\s*\)|@class\b/, 'XPath'],
+  [/:has-text\(|:text\(|>>/i, 'Playwright'],
 ];
 /**
  * 本工具自定义的 shadow 穿透链分隔符:locate 对 shadow 内元素输出 `hostSel >>> seg`,
@@ -34,24 +46,41 @@ const DIALECTS: Array<[RegExp, string]> = [
 const RE_SHADOW_CHAIN = />>>/;
 
 /**
- * 掩掉 CSS 字符串字面量的内容与转义序列,只留"结构位置"的 token,供方言判定使用。
+ * 掩码占位符。选它有两条硬要求,少一条就会凭空造出假方言:
+ *  - 不能是词字符:否则会并进相邻标识符,改变 `\b` 边界;
+ *  - 不能是空白:否则会给 `\bcontains\s*\(` 这类带 `\s*` 的模式搭桥。
+ * NUL 两条都满足,且不可能出现在人手写的 selector 里。
+ */
+const MASK = '\0';
+
+/**
+ * 掩掉 CSS 里"是数据不是语法"的部分(字符串字面量内容、转义序列、注释),
+ * 只留结构位置的 token,供方言判定使用。
  *
- * 为什么必须掩码:`input[value="text()"]`、`a[href*="contains("]`、`[aria-label="a >> b"]`
- * 都是合法 CSS,方言 token 只是属性值里的**数据**。直接拿未掩码的串做正则匹配,
- * 这些选择器会在到达 querySelector 之前就被防呆拒掉(2026-08 实测回归)。
+ * 为什么必须掩码:`input[value="text()"]`、`a[href*="contains("]`、`[aria-label="a >> b"]`、
+ * `div/* contains( *\/ > span` 都是合法 CSS,方言字样只是属性值/注释里的**数据**。
+ * 直接拿原串做正则匹配,这些选择器会在到达 querySelector 之前就被防呆拒掉(2026-08 实测回归)。
  *
- * 只删不增:引号分隔符本身保留,残留串里它仍是非词字符,`\b` 语义不变 ——
- * 所以紧贴引号的真方言(`//*[@class="a" and contains(text(),"b")]`)不会因掩码丢掉边界。
- * 引号未闭合时其后整体按字符串吞掉:这种半截串本就不是合法 CSS,
+ * 三条不变量:
+ *  1. **换占位符,不删**。删掉会让两侧 token 贴到一起、凭空拼出假方言 ——
+ *     `div >\x> span` 等价于 `div > x > span`,把 `\x` 删掉就成了 `div >> span`。
+ *  2. **引号分隔符保留**。残留串里 `"` 仍是非词字符,`\b` 语义不变,
+ *     所以紧贴引号的真方言(`[@class="a" and contains(text(),"b")]`)不会丢边界。
+ *  3. **只处理引号外的注释**。`[data-x="/*"]` 里的 `/*` 是数据。
+ *
+ * 未闭合的引号/注释:其后整体按字面量吞掉。这种半截串本就不是合法 CSS,
  * 由注入侧 findTarget 的 querySelector catch 报"只支持 CSS",防呆不落空。
+ *
+ * 注意:串首形状类方言(`//…`、`text=…`)不能在这里判 —— 见 SHAPES。
  */
 function stripCssLiterals(sel: string): string {
   let out = '';
   let quote: '"' | "'" | null = null;
   for (let i = 0; i < sel.length; i++) {
     const c = sel[i];
-    // CSS 转义(如类名真叫 `a>>b` 时写作 `.a\>\>b`):反斜杠与被转义字符都是字面量。
+    // CSS 转义:`.a\>\>b` 的类名真叫 `a>>b`;`\x` 是把 x 当类型选择器写。
     if (c === '\\') {
+      out += MASK;
       i++;
       continue;
     }
@@ -67,6 +96,14 @@ function stripCssLiterals(sel: string): string {
       out += c;
       continue;
     }
+    // CSS 注释:浏览器在 tokenize 阶段就丢掉,内容不是语法。
+    if (c === '/' && sel[i + 1] === '*') {
+      const end = sel.indexOf('*/', i + 2);
+      out += MASK;
+      if (end === -1) return out; // 未闭合:其后整体是注释
+      i = end + 1;
+      continue;
+    }
     out += c;
   }
   return out;
@@ -74,9 +111,11 @@ function stripCssLiterals(sel: string): string {
 
 /**
  * 命中别的定位方言就报出"是哪种方言 + 该怎么写",否则返回 null。纯函数,单测覆盖。
- * 判定跑在 stripCssLiterals 的残留串上,只看语法位置的 token,不看属性值里的数据。
+ * 两段判定:先看原串的整串形状(SHAPES),再看掩码残留串上的 token(DIALECTS)。
+ * 顺序不能反 —— `//*[…]` 的 `/*` 会被掩码当成 CSS 注释开头吃掉,先判形状才不漏。
  */
 export function selectorDialect(sel: string): string | null {
+  for (const [re, name] of SHAPES) if (re.test(sel)) return name;
   const bare = stripCssLiterals(sel);
   for (const [re, name] of DIALECTS) if (re.test(bare)) return name;
   return null;

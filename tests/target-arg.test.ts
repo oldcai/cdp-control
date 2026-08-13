@@ -52,6 +52,34 @@ test('selectorDialect: 掩码后真方言仍然全部拦下(防呆初衷不能�
   assert.match(String(selectorDialect('//*[@class="a" and contains(text(),"b")]')), /XPath/);
 });
 
+test('selectorDialect: 掩码要换占位符而不是删掉,否则两侧 token 会贴出假方言', () => {
+  // `\x` 是把 x 当类型选择器写,`div >\x> span` 等价于 `div > x > span`(合法 CSS)。
+  // 把转义整段删掉就成了 `div >> span`,会被误判 Playwright。
+  assert.equal(selectorDialect('div >\\x> span'), null);
+  assert.deepEqual(normArg('div >\\x> span'), { sel: 'div >\\x> span' });
+  // 类名真叫 a>>b 的写法同理
+  assert.equal(selectorDialect('.a\\>\\>b'), null);
+});
+
+test('selectorDialect: CSS 注释是被 tokenizer 丢掉的文本,不是语法', () => {
+  assert.equal(selectorDialect('div/* contains( */ > span'), null);
+  assert.equal(selectorDialect('div/* text() */ > span'), null);
+  assert.equal(selectorDialect('div/* @class */ > span'), null);
+  assert.deepEqual(normArg('div/* >>> */ span'), { sel: 'div/* >>> */ span' }); // 注释里的 >>> 不是 shadow 链
+  // 引号里的 `/*` 是数据,不能当注释开头吞掉后面
+  assert.equal(selectorDialect('[data-x="/*"] > span'), null);
+  // 注释未闭合(半截串)不当方言 —— 交给 querySelector 报错
+  assert.equal(selectorDialect('div/* 没闭合'), null);
+});
+
+test('selectorDialect: 串首形状必须先于掩码判,`//*[…]` 的 /* 别被当成注释吃掉', () => {
+  // 这条是上面两个修复的交互陷阱:先掩码再判,`//*[...]` 会被 CSS 注释分支吞成 `/`,XPath 漏判。
+  assert.match(String(selectorDialect('//*[contains(@class,"x")]')), /XPath/);
+  assert.match(String(selectorDialect('//*')), /XPath/);
+  assert.match(String(selectorDialect('  //div[@id=x]')), /XPath/);
+  assert.match(String(selectorDialect('text=登录')), /Playwright/);
+});
+
 test('normArg: `>>>` 是本工具自己的 shadow 链,要给对诊断而不是"像 Playwright"', () => {
   // locate 对 shadow 内元素输出 `hostSel >>> seg`;操作命令走裸 querySelector 不认它。
   // 若落到方言判定,Playwright 的 `>>` 会抢先命中,把本工具的输出诊断成别家方言 + 指错下一步。
