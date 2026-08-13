@@ -105,6 +105,8 @@ test('参数防呆必须早于 needTarget:位置 ref 与操作目标都不能被
     }
     await assertGuardBeatsTarget(['fill', '//div[@id=x]', 'v'], home, /XPath/, 'fill XPath');
     await assertGuardBeatsTarget(['click', 'my-app >>> .btn'], home, /shadow 链/, 'click shadow 链');
+    // ③ press-key 的按键拼写校验(parseKeySpec)是同一个反模式,虽非本 PR 引入,一并前移
+    await assertGuardBeatsTarget(['press-key', 'Ctrl+NoSuchKey'], home, /键/, 'press-key 拼写');
   } finally {
     await held.close();
     rmSync(home, { recursive: true, force: true });

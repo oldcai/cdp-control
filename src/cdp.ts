@@ -18,6 +18,7 @@ import { cmdListen } from './monitor.ts';
 import { ensureBrowser, killBrowser } from './browser.ts';
 import { runScript } from './run-script.ts';
 import { runRecipe } from './recipe-runner.ts';
+import { parseKeySpec } from './keys.ts';
 import { assertTargetArg, parseRefArg } from './target-arg.ts';
 import type { Target } from './transport.ts';
 
@@ -544,6 +545,7 @@ targetCmd('article', '以 ref 为根提取格式友好的 Markdown 文章(保序
 feedbackOpt(targetCmd('press-key', '按键/组合键,如 Enter、Ctrl+Shift+A、Tab'))
   .argument('<key>', '按键')
   .action(async (key: string, opts: CliOptions) => {
+    parseKeySpec(key); // 同 assertTargetArg:按键拼写错误要先于 needTarget 报出来,别被端点错误盖掉
     const r = await api.pressKey(await needTarget(opts.target), key, feedbackCfg(opts));
     console.log(`已按键: ${key}`);
     printFeedback(r?.feedback);
