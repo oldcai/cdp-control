@@ -250,6 +250,27 @@ return await cdp.click(target, { ref: ${recoveryRef} }, { noFeedback: true });
       assert.match(result.stderr, /→ target: CDP Integration Fixture/);
       assert.match(result.stderr, /错误: 未找到: #selector-does-not-exist/);
     });
+
+    await t.test('⑨ 防呆放行的"像方言"selector,真浏览器确实认它们是合法 CSS', { timeout: 30_000 }, async () => {
+      // selectorDialect 放行这些串的**理由**是"它们是合法 CSS,方言字样只是数据"。
+      // 那条理由必须由真浏览器判,不能只由我们的单测自证 —— 这里让 querySelector 自己表态。
+      // (2026-08:未掩码的防呆正则曾把前三条拒在 querySelector 之前,是真回归。)
+      const probe = `(() => {
+        const sels = [
+          'input[value="text()"]',
+          'a[href*="contains("]',
+          '[aria-label="a >> b"]',
+          'div >\\\\x> span',
+          'div/* contains( */ > span',
+          'div/* >>> */ span',
+          '.a\\\\>\\\\>b'
+        ];
+        return sels.filter(s => { try { document.querySelector(s); return false; } catch { return true; } });
+      })()`;
+      const result = await harness.runCli(['eval', '--target', TARGET_MARKER, probe], '⑨ 真浏览器校验合法 CSS');
+      assertSuccess(result, '真浏览器 querySelector 校验');
+      assert.deepEqual(jsonValue(result.stdout), [], '这些串必须都是浏览器接受的合法 CSS');
+    });
   } finally {
     const tempHome = harness.home;
     await harness.cleanup();
