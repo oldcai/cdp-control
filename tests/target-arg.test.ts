@@ -96,6 +96,27 @@ test('selectorDialect: XPath 的其余根形态也要拦(绝对/相对/引擎前
   assert.throws(() => normArg('.//button'), /XPath/);
 });
 
+test('selectorDialect: 相对 XPath 的属性与轴语法也要认(不只 contains/text/@class)', () => {
+  // 原先只认 @class 是不一致 —— 这些一样常见
+  assert.match(String(selectorDialect("div[@id='x']")), /XPath/);
+  assert.match(String(selectorDialect("*[@role='button']")), /XPath/);
+  assert.match(String(selectorDialect("//a[@href='x']")), /XPath/);
+  // 轴
+  assert.match(String(selectorDialect('descendant::button')), /XPath/);
+  assert.match(String(selectorDialect('ancestor-or-self::div')), /XPath/);
+});
+
+test('selectorDialect: 但 CSS 伪元素不能被轴规则误伤', () => {
+  // 轴必须按名字白名单认;写成通用 `\w+::\w+` 会把这些合法 CSS 全吃掉
+  for (const sel of ['div::before', 'p::first-line', 'input::placeholder', 'li::marker', '::selection']) {
+    assert.equal(selectorDialect(sel), null, sel);
+  }
+  // `@` 在引号/注释里仍是数据
+  assert.equal(selectorDialect('[data-x="@id"]'), null);
+  assert.equal(selectorDialect('a[href*="@class"]'), null);
+  assert.equal(selectorDialect('div/* @id */ > p'), null);
+});
+
 test('selectorDialect: Playwright 显式引擎前缀也要认(不只 text=)', () => {
   assert.match(String(selectorDialect('css=button')), /Playwright/);
   assert.match(String(selectorDialect('id=submit')), /Playwright/);

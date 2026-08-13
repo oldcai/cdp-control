@@ -465,13 +465,16 @@ interface ClickPrepared {
 
 /** 点击 target 页面上匹配 selector 或 ref 的元素。默认走 CDP 坐标输入;dom=true 显式走旧合成路径。 */
 export async function click(target: Target, arg: TargetArg, opts: ClickOpts = {}) {
+  // 必须在 runWithFeedback 之前归一化:normArg 带防呆(URL/XPath/Playwright/shadow 链),
+  // 留在动作回调里会让非法目标先装上 observer、先跑一次 list(),产生副作用后才失败。
+  const normalized = normArg(arg);
   return runWithFeedback(
     target,
     async () => {
       const prepared = await invoke<ClickPrepared>(
         target,
         inject('click', {
-          ...normArg(arg),
+          ...normalized,
           dom: opts.dom || undefined,
         }),
       );
@@ -498,7 +501,8 @@ export async function fill(
   value: string,
   opts: FeedbackOpts = {},
 ): Promise<ActionResult & { feedback: FeedbackResult | null }> {
-  return runWithFeedback(target, () => invoke<ActionResult>(target, inject('fill', { ...normArg(arg), value })), opts);
+  const normalized = normArg(arg); // 同 click:防呆必须早于 runWithFeedback
+  return runWithFeedback(target, () => invoke<ActionResult>(target, inject('fill', { ...normalized, value })), opts);
 }
 
 // 共享轮询原语:反复 eval 一段 JS 布尔表达式直到真值或超时。desc 用于超时报错文案。
@@ -557,7 +561,8 @@ export async function focus(
   arg: TargetArg,
   opts: FeedbackOpts = {},
 ): Promise<ActionResult & { feedback: FeedbackResult | null }> {
-  return runWithFeedback(target, () => invoke<ActionResult>(target, inject('focus', normArg(arg))), opts);
+  const normalized = normArg(arg); // 同 click:防呆必须早于 runWithFeedback
+  return runWithFeedback(target, () => invoke<ActionResult>(target, inject('focus', normalized)), opts);
 }
 
 /** 返回 target 页面当前焦点元素(document.activeElement)信息,无焦点返回 null。 */
@@ -617,6 +622,7 @@ export async function hover(
   arg: TargetArg,
   opts: FeedbackOpts = {},
 ): Promise<ActionResult & { feedback: FeedbackResult | null }> {
+  const normalized = normArg(arg); // 同 click:防呆必须早于 runWithFeedback
   return runWithFeedback(
     target,
     async () => {
@@ -626,7 +632,7 @@ export async function hover(
         recovered?: RecoveredResult;
         x?: number;
         y?: number;
-      }>(target, inject('hover', normArg(arg)));
+      }>(target, inject('hover', normalized));
       if (pos?.refInvalid) return pos; // ref 失效:注入侧已自愈,不 dispatch 鼠标
       if (!pos?.ok) throw new Error('未找到: ' + (typeof arg === 'string' ? arg : 'ref=' + arg.ref));
       if (typeof pos.x !== 'number' || typeof pos.y !== 'number') throw new Error('悬停坐标缺失');

@@ -11,12 +11,13 @@
  * 无 browser.json 时 ensureBrowser() 固定用默认 9222、不读 CDP_PORT,
  * 所以靠 env 设端口是无效的:某台机器默认端点上恰好有健康 CDP 时,
  * 错误的求值顺序会先成功走完 needTarget、再由校验抛出同样的提示,用例照样绿。
- * 这里改为写入权威 browser.json,并把它的 port 指向**本进程自己占住的非 CDP listener**:
- * 该端口一定 busy、一定不是健康 CDP,配合 CDP_NO_AUTOSTART=1 保证 needTarget 必然失败。
+ * 这里改为写入权威 browser.json,把它的 port 指向一个**当前空闲的端口**,
+ * 配合 CDP_NO_AUTOSTART=1 走"端点未就绪,拒绝自动启动"这条干净路径,保证 needTarget 必然失败;
+ * 再用一次 `list` 做前提自检,端点若竟然可用就直接判失败,不允许静默假绿。
  */
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFile, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
@@ -27,20 +28,58 @@ const execFileAsync = promisify(execFile);
 const REPO_ROOT = join(import.meta.dirname, '..');
 const CLI = join(REPO_ROOT, 'dist', 'cdp.js');
 
-/** 占住一个端口且不说 CDP 协议:保证 /json/version 探活必然不健康。 */
-function holdNonCdpPort(): Promise<{ port: number; close: () => Promise<void> }> {
+/**
+ * 取一个当前空闲的端口,并**立刻释放**。
+ *
+ * 早期版本是"占住一个非 CDP listener 不放",那是错的:cdp-control 对配置端口上的
+ * 非健康 listener 有明确的回收(kill)语义,而这个 listener 就在测试进程里 ——
+ * 等于让被测程序来杀测试自己。实测 Windows CI 上前提自检直接不成立(`list` 退出 0)。
+ * 空闲端口 + CDP_NO_AUTOSTART=1 走的是"端点未就绪,拒绝自动启动"这条干净路径,
+ * 不触发任何回收逻辑,跨平台语义一致。
+ *
+ * 万一这个端口在释放后被别的进程抢走,它会变成"busy 但不健康"—— 同样导致目标解析失败,
+ * 结论不变;而前提自检会兜住任何"竟然可用"的意外。
+ */
+function pickFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
-    const server: Server = createServer(socket => socket.destroy());
+    const server: Server = createServer();
     server.once('error', reject);
     server.listen({ port: 0, host: '127.0.0.1', exclusive: true }, () => {
       const address = server.address();
       if (address == null || typeof address === 'string') return reject(new Error('未取得端口'));
-      resolve({
-        port: address.port,
-        close: () => new Promise<void>(done => server.close(() => done())),
-      });
+      const { port } = address;
+      server.close(() => resolve(port));
     });
   });
+}
+
+/**
+ * 保证 dist/cdp.js 与当前源码同步 —— **绝不因为缺产物就 skip**。
+ *
+ * 这条用例测的是 `src/cdp.ts` / `src/api.ts` 里的求值顺序,但跑的是编译产物。
+ * 早期版本在缺 dist 时 `t.skip`,于是:全新工作树整条回归被静默跳过,
+ * 已有工作树还可能拿**陈旧 dist** 测试 —— 源码重新破坏求值顺序时本地门禁照样绿。
+ * `npm test` 自身不构建,pre-commit 也只跑 typecheck + npm test,所以这个洞是真的。
+ * 这里改成:产物缺失或旧于任一源文件就地重建(复用项目自己的 build.mjs),失败则用例失败。
+ */
+function ensureFreshCli(): void {
+  const newestSource = ['src', 'build.mjs'].reduce((newest, entry) => {
+    const full = join(REPO_ROOT, entry);
+    const walk = (p: string): number => {
+      const st = statSync(p);
+      if (!st.isDirectory()) return st.mtimeMs;
+      return readdirSync(p).reduce((m, child) => Math.max(m, walk(join(p, child))), 0);
+    };
+    return Math.max(newest, walk(full));
+  }, 0);
+  if (existsSync(CLI) && statSync(CLI).mtimeMs >= newestSource) return;
+  const built = spawnSync(process.execPath, [join(REPO_ROOT, 'build.mjs')], { cwd: REPO_ROOT, encoding: 'utf8' });
+  assert.equal(
+    built.status,
+    0,
+    `dist/ 缺失或陈旧且重建失败(本用例不允许因缺产物而跳过):\n${built.stdout}\n${built.stderr}`,
+  );
+  assert.ok(existsSync(CLI), `重建后仍无 ${CLI}`);
 }
 
 async function runCli(args: string[], home: string): Promise<{ code: number; stderr: string }> {
@@ -68,31 +107,28 @@ async function assertGuardBeatsTarget(args: string[], home: string, expected: Re
   assert.doesNotMatch(r.stderr, /未就绪|拒绝自动启动浏览器|端点/, `${label} 不该走到端点解析:\n${r.stderr}`);
 }
 
-test('参数防呆必须早于 needTarget:位置 ref 与操作目标都不能被端点错误盖掉', async t => {
-  if (!existsSync(CLI)) {
-    t.skip(`未构建 dist/,跳过:${CLI}`);
-    return;
-  }
+test('参数防呆必须早于 needTarget:位置 ref 与操作目标都不能被端点错误盖掉', async () => {
+  ensureFreshCli();
   const tmpRoot = join(REPO_ROOT, 'tmp');
   await mkdir(tmpRoot, { recursive: true });
   const home = mkdtempSync(join(tmpRoot, 'cli-arg-order-'));
-  const held = await holdNonCdpPort();
+  const port = await pickFreePort();
   try {
-    // 权威配置:端口指向我们自己占住的非 CDP listener。exe 取当前 node(必然存在,配置才算合法)。
+    // 权威配置:端口指向一个空闲端口。exe 取当前 node(必然存在,配置才算合法)。
     writeFileSync(
       join(home, 'browser.json'),
       JSON.stringify({
         exe: process.execPath,
         kind: 'chromium',
         args: [],
-        port: held.port,
+        port,
         userData: join(home, 'user-data'),
       }),
     );
 
     // 前提自检:端点确实不可用 —— 否则下面全部断言都只是假绿。
     const sanity = await runCli(['list'], home);
-    assert.notEqual(sanity.code, 0, `前提不成立:端点 ${held.port} 竟可用,本用例会假绿\n${sanity.stderr}`);
+    assert.notEqual(sanity.code, 0, `前提不成立:端点 ${port} 竟可用,本用例会假绿\n${sanity.stderr}`);
 
     // ① 位置参数是 ref 序号的命令
     for (const cmd of ['view', 'info', 'article']) {
@@ -108,7 +144,6 @@ test('参数防呆必须早于 needTarget:位置 ref 与操作目标都不能被
     // ③ press-key 的按键拼写校验(parseKeySpec)是同一个反模式,虽非本 PR 引入,一并前移
     await assertGuardBeatsTarget(['press-key', 'Ctrl+NoSuchKey'], home, /键/, 'press-key 拼写');
   } finally {
-    await held.close();
     rmSync(home, { recursive: true, force: true });
   }
 });

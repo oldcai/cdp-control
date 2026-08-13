@@ -43,7 +43,13 @@ const SHAPES: Array<[RegExp, string]> = [
  * 这些判在掩码后的残留串上 —— 引号/注释里的同名字样是数据,不是语法。
  */
 const DIALECTS: Array<[RegExp, string]> = [
-  [/\bcontains\s*\(|\btext\s*\(\s*\)|@class\b/, 'XPath'],
+  // `@attr` 是 XPath 取属性,CSS 里 `@` 只能起 at-rule、绝不出现在 selector 语法位置。
+  // 原先只认 `@class` 是个不一致 —— `div[@id='x']`、`*[@role='button']` 一样常见。
+  // 轴要按名字白名单认:不能写成通用 `\w+::\w+`,那会吃掉合法的 CSS 伪元素 `div::before`。
+  [
+    /\bcontains\s*\(|\btext\s*\(\s*\)|@[a-zA-Z_][\w.-]*|\b(?:descendant|ancestor|following|preceding|child|parent|self|attribute|namespace)(?:-or-self)?::/,
+    'XPath',
+  ],
   [/:has-text\(|:text\(|>>/i, 'Playwright'],
 ];
 /**
