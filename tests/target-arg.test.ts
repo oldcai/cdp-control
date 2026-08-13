@@ -111,6 +111,12 @@ test('selectorDialect: 但 CSS 伪元素不能被轴规则误伤', () => {
   for (const sel of ['div::before', 'p::first-line', 'input::placeholder', 'li::marker', '::selection']) {
     assert.equal(selectorDialect(sel), null, sel);
   }
+  // 轴名本身也可能是元素名:真浏览器实测 `descendant::before` / `self::part(name)` / `parent::after`
+  // parse 通过(合法 CSS),而 `descendant::button` / `self::div` 抛 SyntaxError(真 XPath)。
+  // 所以分界是"`::` 后面跟的是不是伪元素",不是"前面是不是轴名"。
+  for (const sel of ['descendant::before', 'self::part(name)', 'parent::after', 'child::-webkit-scrollbar']) {
+    assert.equal(selectorDialect(sel), null, sel);
+  }
   // `@` 在引号/注释里仍是数据
   assert.equal(selectorDialect('[data-x="@id"]'), null);
   assert.equal(selectorDialect('a[href*="@class"]'), null);

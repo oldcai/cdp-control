@@ -42,12 +42,29 @@ const SHAPES: Array<[RegExp, string]> = [
  * token 类方言:XPath 与 Playwright/uBlock 写法。querySelector 只吃 CSS,原样丢进去只会抛裸 SyntaxError。
  * 这些判在掩码后的残留串上 —— 引号/注释里的同名字样是数据,不是语法。
  */
+/**
+ * CSS 伪元素名(跟在 `::` 后面)。轴规则必须把它们排除掉。
+ *
+ * 真浏览器实测(集成用例 ⑨,ubuntu/windows/macOS)给出的分界很干净:
+ *   `descendant::before` / `self::part(name)` / `parent::after`  → **parse 通过**,是合法 CSS
+ *   `descendant::button` / `self::div`                          → **SyntaxError**,是真 XPath
+ * 也就是说"轴名 + 伪元素"合法(页面上可以有名为 descendant 的元素),"轴名 + 元素名"才非法。
+ * 光按轴名判会把前者误拒 —— 所以这里按**后面跟的是不是伪元素**来分。
+ * `-[\w-]+` 覆盖 `::-webkit-*` 这类厂商前缀。
+ */
+const CSS_PSEUDO_ELEMENT =
+  'before|after|first-line|first-letter|marker|selection|placeholder|backdrop|part|slotted|file-selector-button|cue|cue-region|target-text|spelling-error|grammar-error|highlight|view-transition[\\w-]*|-[\\w-]+';
+
 const DIALECTS: Array<[RegExp, string]> = [
   // `@attr` 是 XPath 取属性,CSS 里 `@` 只能起 at-rule、绝不出现在 selector 语法位置。
   // 原先只认 `@class` 是个不一致 —— `div[@id='x']`、`*[@role='button']` 一样常见。
-  // 轴要按名字白名单认:不能写成通用 `\w+::\w+`,那会吃掉合法的 CSS 伪元素 `div::before`。
+  // 轴按名字白名单认,并排除伪元素(见 CSS_PSEUDO_ELEMENT);
+  // 更不能写成通用 `\w+::\w+`,那会连 `div::before` 一起吃掉。
   [
-    /\bcontains\s*\(|\btext\s*\(\s*\)|@[a-zA-Z_][\w.-]*|\b(?:descendant|ancestor|following|preceding|child|parent|self|attribute|namespace)(?:-or-self)?::/,
+    new RegExp(
+      `\\bcontains\\s*\\(|\\btext\\s*\\(\\s*\\)|@[a-zA-Z_][\\w.-]*|` +
+        `\\b(?:descendant|ancestor|following|preceding|child|parent|self|attribute|namespace)(?:-or-self)?::(?!(?:${CSS_PSEUDO_ELEMENT})\\b)`,
+    ),
     'XPath',
   ],
   [/:has-text\(|:text\(|>>/i, 'Playwright'],

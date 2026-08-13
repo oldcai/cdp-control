@@ -267,7 +267,10 @@ return await cdp.click(target, { ref: ${recoveryRef} }, { noFeedback: true });
           '/* c */ div',
           '.\\\\/foo',
           'div[data-x=y]',
-          'svg text[x="1"]'
+          'svg text[x="1"]',
+          'descendant::before',
+          'self::part(name)',
+          'parent::after'
         ];
         return sels.filter(s => { try { document.querySelector(s); return false; } catch { return true; } });
       })()`;

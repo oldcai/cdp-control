@@ -17,7 +17,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
@@ -54,32 +54,22 @@ function pickFreePort(): Promise<number> {
 }
 
 /**
- * 保证 dist/cdp.js 与当前源码同步 —— **绝不因为缺产物就 skip**。
+ * **无条件**重建 dist/cdp.js,再拿它做断言。
  *
- * 这条用例测的是 `src/cdp.ts` / `src/api.ts` 里的求值顺序,但跑的是编译产物。
- * 早期版本在缺 dist 时 `t.skip`,于是:全新工作树整条回归被静默跳过,
- * 已有工作树还可能拿**陈旧 dist** 测试 —— 源码重新破坏求值顺序时本地门禁照样绿。
- * `npm test` 自身不构建,pre-commit 也只跑 typecheck + npm test,所以这个洞是真的。
- * 这里改成:产物缺失或旧于任一源文件就地重建(复用项目自己的 build.mjs),失败则用例失败。
+ * 这条用例测的是 `src/cdp.ts` / `src/api.ts` 里的求值顺序,但跑的是编译产物,
+ * 所以"产物到底对不对应当前源码"必须是**证明**,不能是推断。此前两版都栽在间接信号上:
+ *   v1 缺 dist 就 `t.skip`   → 全新工作树整条回归静默消失;
+ *   v2 比 mtime 判新鲜       → dist 从缓存/备份恢复、或改动落在同一时间戳粒度内时,
+ *                              会复用内容无关的旧 bundle,照样假绿。
+ * `npm test` 自身不构建、pre-commit 也只跑 typecheck + npm test,所以这个洞是真的。
+ *
+ * 现在直接调项目自己的 `build.mjs`(实测约 1.5s,相对这条回归的价值可以接受),
+ * 构建失败即用例失败 —— 既不 skip,也不猜。
  */
-function ensureFreshCli(): void {
-  const newestSource = ['src', 'build.mjs'].reduce((newest, entry) => {
-    const full = join(REPO_ROOT, entry);
-    const walk = (p: string): number => {
-      const st = statSync(p);
-      if (!st.isDirectory()) return st.mtimeMs;
-      return readdirSync(p).reduce((m, child) => Math.max(m, walk(join(p, child))), 0);
-    };
-    return Math.max(newest, walk(full));
-  }, 0);
-  if (existsSync(CLI) && statSync(CLI).mtimeMs >= newestSource) return;
+function buildCli(): void {
   const built = spawnSync(process.execPath, [join(REPO_ROOT, 'build.mjs')], { cwd: REPO_ROOT, encoding: 'utf8' });
-  assert.equal(
-    built.status,
-    0,
-    `dist/ 缺失或陈旧且重建失败(本用例不允许因缺产物而跳过):\n${built.stdout}\n${built.stderr}`,
-  );
-  assert.ok(existsSync(CLI), `重建后仍无 ${CLI}`);
+  assert.equal(built.status, 0, `构建 dist/ 失败(本用例必须测当前源码):\n${built.stdout}\n${built.stderr}`);
+  assert.ok(existsSync(CLI), `构建后仍无 ${CLI}`);
 }
 
 async function runCli(args: string[], home: string): Promise<{ code: number; stderr: string }> {
@@ -108,7 +98,7 @@ async function assertGuardBeatsTarget(args: string[], home: string, expected: Re
 }
 
 test('参数防呆必须早于 needTarget:位置 ref 与操作目标都不能被端点错误盖掉', async () => {
-  ensureFreshCli();
+  buildCli();
   const tmpRoot = join(REPO_ROOT, 'tmp');
   await mkdir(tmpRoot, { recursive: true });
   const home = mkdtempSync(join(tmpRoot, 'cli-arg-order-'));
