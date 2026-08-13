@@ -10,11 +10,11 @@ import { spawn, spawnSync, execFile } from 'node:child_process';
 import { createServer, connect } from 'node:net';
 import { lookup } from 'node:dns/promises';
 import { promisify } from 'node:util';
-import { getJson, setEndpointHost, setPort, HOST, PORT, sleep } from './transport';
-import { maybeSpawnDaemon } from './monitor';
+import { getJson, setEndpointHost, setPort, HOST, PORT, sleep } from './transport.ts';
+import { maybeSpawnDaemon } from './monitor.ts';
 import { cdpNoAutostart } from './paths.ts';
 import { processBirthIdentity } from './process-identity.ts';
-import { discoverCandidates, type BrowserKind } from './browser-discover';
+import { discoverCandidates, type BrowserKind } from './browser-discover.ts';
 import {
   browserConfigPath,
   parseBrowserConfig,
@@ -24,7 +24,7 @@ import {
   DEFAULT_PORT,
   DEFAULT_USER_DATA,
   type BrowserConfig,
-} from './browser-config';
+} from './browser-config.ts';
 import {
   prepareFixedPort,
   probePortAddresses,
@@ -44,7 +44,7 @@ import {
   type ProbeResult,
   FixedPortLaunchAttempt,
   waitForCdpReady,
-} from './browser-port';
+} from './browser-port.ts';
 
 export interface EnsureResult {
   ready: boolean;
