@@ -84,6 +84,29 @@ test('selectorDialect: 串首形状必须先于掩码判,`//*[…]` 的 /* 别�
   assert.match(String(selectorDialect('text=登录')), /Playwright/);
 });
 
+test('selectorDialect: XPath 的其余根形态也要拦(绝对/相对/引擎前缀)', () => {
+  assert.match(String(selectorDialect('/html/body/div')), /XPath/); // 绝对路径
+  assert.match(String(selectorDialect('.//button')), /XPath/); // 相对路径
+  assert.match(String(selectorDialect('./div')), /XPath/);
+  assert.match(String(selectorDialect('xpath=//button')), /XPath/); // 引擎前缀
+  assert.match(String(selectorDialect('XPath = //button')), /XPath/);
+  assert.throws(() => normArg('.//button'), /XPath/);
+});
+
+test('selectorDialect: 但以 / 或 . 开头的合法 CSS 不能被上一条误伤', () => {
+  // 注释可以打头 —— `/*` 不是 XPath 根
+  assert.equal(selectorDialect('/* c */ div'), null);
+  assert.deepEqual(normArg('/* c */ div'), { sel: '/* c */ div' });
+  // 类名真叫 `/foo` 时写作 `.\/foo`,`.` 后面是 `\` 不是 `/`
+  assert.equal(selectorDialect('.\\/foo'), null);
+  // 普通类选择器不受影响
+  assert.equal(selectorDialect('.foo'), null);
+  assert.equal(selectorDialect('.foo > .bar'), null);
+  // `text` 是合法 SVG 元素名,只有紧跟 `=` 才算 Playwright
+  assert.equal(selectorDialect('text'), null);
+  assert.equal(selectorDialect('svg text[x="1"]'), null);
+});
+
 test('normArg: `>>>` 是本工具自己的 shadow 链,要给对诊断而不是"像 Playwright"', () => {
   // locate 对 shadow 内元素输出 `hostSel >>> seg`;操作命令走裸 querySelector 不认它。
   // 若落到方言判定,Playwright 的 `>>` 会抢先命中,把本工具的输出诊断成别家方言 + 指错下一步。

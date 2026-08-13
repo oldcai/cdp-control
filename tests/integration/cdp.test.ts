@@ -263,7 +263,9 @@ return await cdp.click(target, { ref: ${recoveryRef} }, { noFeedback: true });
           'div >\\\\x> span',
           'div/* contains( */ > span',
           'div/* >>> */ span',
-          '.a\\\\>\\\\>b'
+          '.a\\\\>\\\\>b',
+          '/* c */ div',
+          '.\\\\/foo'
         ];
         return sels.filter(s => { try { document.querySelector(s); return false; } catch { return true; } });
       })()`;
