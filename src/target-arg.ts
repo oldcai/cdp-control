@@ -24,6 +24,14 @@ const DIALECTS: Array<[RegExp, string]> = [
   [/\bcontains\s*\(|\btext\s*\(\s*\)|^\s*\/\/|@class\b/, 'XPath'],
   [/:has-text\(|:text\(|>>|^text=/i, 'Playwright'],
 ];
+/**
+ * 本工具自定义的 shadow 穿透链分隔符:locate 对 shadow 内元素输出 `hostSel >>> seg`,
+ * 但只有 view --selector-file / find --selector 走 findRoot 解析它;
+ * click/fill/focus/hover 是裸 document.querySelector,不认。
+ * 必须在方言判定**之前**认领:否则 Playwright 的 `>>` 会抢先命中,
+ * 把本工具自己的输出诊断成"像是 Playwright 写法"并指向 find --text —— 错的诊断比没诊断更坑。
+ */
+const RE_SHADOW_CHAIN = />>>/;
 
 /**
  * 掩掉 CSS 字符串字面量的内容与转义序列,只留"结构位置"的 token,供方言判定使用。
@@ -91,6 +99,11 @@ export function normArg(a: TargetArg): { sel?: string; ref?: number } {
     if (RE_URL.test(a.trim())) {
       throw new Error(
         `操作目标是 ref 序号或 CSS selector,不是网址: ${a}\n打开网页用 cdp-control open <url>(或 navigate),再 view 拿 ref 去操作`,
+      );
+    }
+    if (RE_SHADOW_CHAIN.test(stripCssLiterals(a))) {
+      throw new Error(
+        `shadow 链(a >>> b)只有 view --selector-file / find --selector 解析,操作命令不认: ${a}\n先 cdp-control find --selector "${a}" 拿到 [ref=N],再用 ref 操作`,
       );
     }
     const d = selectorDialect(a);

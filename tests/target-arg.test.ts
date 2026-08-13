@@ -52,6 +52,24 @@ test('selectorDialect: 掩码后真方言仍然全部拦下(防呆初衷不能�
   assert.match(String(selectorDialect('//*[@class="a" and contains(text(),"b")]')), /XPath/);
 });
 
+test('normArg: `>>>` 是本工具自己的 shadow 链,要给对诊断而不是"像 Playwright"', () => {
+  // locate 对 shadow 内元素输出 `hostSel >>> seg`;操作命令走裸 querySelector 不认它。
+  // 若落到方言判定,Playwright 的 `>>` 会抢先命中,把本工具的输出诊断成别家方言 + 指错下一步。
+  const msg = (() => {
+    try {
+      normArg('my-app >>> .btn');
+      return '';
+    } catch (e) {
+      return String((e as Error).message);
+    }
+  })();
+  assert.match(msg, /shadow 链/);
+  assert.match(msg, /find --selector/); // 指对下一步
+  assert.doesNotMatch(msg, /Playwright/); // 不能误诊成别家方言
+  // 引号里的 `>>>` 仍是数据,不当 shadow 链
+  assert.deepEqual(normArg('[aria-label="a >>> b"]'), { sel: '[aria-label="a >>> b"]' });
+});
+
 test('parseRefArg: 只吃纯数字;网址给出可执行的下一步;别的报清楚收到了啥', () => {
   assert.equal(parseRefArg('80'), 80);
   assert.equal(parseRefArg(undefined), undefined);
