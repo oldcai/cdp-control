@@ -101,9 +101,38 @@ test('selectorDialect: 相对 XPath 的属性与轴语法也要认(不只 contai
   assert.match(String(selectorDialect("div[@id='x']")), /XPath/);
   assert.match(String(selectorDialect("*[@role='button']")), /XPath/);
   assert.match(String(selectorDialect("//a[@href='x']")), /XPath/);
-  // 轴
-  assert.match(String(selectorDialect('descendant::button')), /XPath/);
-  assert.match(String(selectorDialect('ancestor-or-self::div')), /XPath/);
+  // XPath 位置谓词:CSS 属性名不能以数字开头,故 `[N]` 在语法位置必然不是 CSS(实测)
+  assert.match(String(selectorDialect('//button[1]')), /XPath/);
+  assert.match(String(selectorDialect('following-sibling::button[1]')), /XPath/);
+  assert.match(String(selectorDialect('descendant::*')), /XPath/); // `::*` 实测 INVALID
+});
+
+test('selectorDialect: 裸轴表达式**刻意不判**——`X::Y` 本质不可判定', () => {
+  // 真浏览器实测:`X::Y` 合不合法取决于 Y 是不是当前浏览器认识的伪元素,两侧都是开放集合:
+  //   descendant::BEFORE / details-content / view-transition-group(x)  → VALID(合法 CSS)
+  //   descendant::button / following-sibling::div                      → INVALID(真 XPath)
+  // 纯 Node 侧没有 CSS parser,判不了。继续补名单会两个方向轮流漏,所以刻意退化:
+  // 裸轴不诊断,交给 querySelector 报通用"只支持 CSS"。**退化可接受,误伤不可接受。**
+  //
+  // 这一侧(合法 CSS)必须放行 —— 回归的是这个:
+  for (const sel of [
+    'descendant::before',
+    'descendant::BEFORE', // 伪元素名大小写不敏感
+    'descendant::details-content', // 新增伪元素,名单必然跟不上
+    'descendant::view-transition-group(x)',
+    'self::part(name)',
+    'parent::after',
+  ]) {
+    assert.equal(selectorDialect(sel), null, sel);
+  }
+  // 这一侧(真 XPath)刻意不判 —— 记录该取舍,改动时须同步更新注释与 PR 说明:
+  for (const sel of ['descendant::button', 'following-sibling::button', 'preceding-sibling::div']) {
+    assert.equal(selectorDialect(sel), null, `${sel}:裸轴刻意退化,不是遗漏`);
+  }
+  // 但只要**另有**无名单的 XPath 证据,仍然判得出来:
+  assert.match(String(selectorDialect('//following-sibling::button')), /XPath/); // 路径根
+  assert.match(String(selectorDialect('following-sibling::button[1]')), /XPath/); // 位置谓词
+  assert.match(String(selectorDialect("descendant::*[@id='x']")), /XPath/); // 属性 + ::*
 });
 
 test('selectorDialect: 但 CSS 伪元素不能被轴规则误伤', () => {
@@ -114,9 +143,6 @@ test('selectorDialect: 但 CSS 伪元素不能被轴规则误伤', () => {
   // 轴名本身也可能是元素名:真浏览器实测 `descendant::before` / `self::part(name)` / `parent::after`
   // parse 通过(合法 CSS),而 `descendant::button` / `self::div` 抛 SyntaxError(真 XPath)。
   // 所以分界是"`::` 后面跟的是不是伪元素",不是"前面是不是轴名"。
-  for (const sel of ['descendant::before', 'self::part(name)', 'parent::after', 'child::-webkit-scrollbar']) {
-    assert.equal(selectorDialect(sel), null, sel);
-  }
   // `@` 在引号/注释里仍是数据
   assert.equal(selectorDialect('[data-x="@id"]'), null);
   assert.equal(selectorDialect('a[href*="@class"]'), null);
@@ -146,6 +172,8 @@ test('selectorDialect: 但以 / 或 . 开头的合法 CSS 不能被上一条误�
   assert.equal(selectorDialect('svg text[x="1"]'), null);
   // 通用引擎前缀只认「串首标识符紧跟 =」;属性判等写在 [] 里的合法 CSS 不受影响
   assert.equal(selectorDialect('div[data-x=y]'), null);
+  assert.equal(selectorDialect('div:nth-child(1)'), null); // 括号里的数字不是 [N] 谓词
+  assert.equal(selectorDialect('a[href="[1]"]'), null); // 引号里的 [1] 是数据
   assert.equal(selectorDialect('input[type=checkbox]:checked'), null);
   assert.equal(selectorDialect('a[href^="/x"] > span'), null);
   // 父轴形态不能误伤普通类选择器

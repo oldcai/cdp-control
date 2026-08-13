@@ -255,6 +255,9 @@ return await cdp.click(target, { ref: ${recoveryRef} }, { noFeedback: true });
       // selectorDialect 放行这些串的**理由**是"它们是合法 CSS,方言字样只是数据"。
       // 那条理由必须由真浏览器判,不能只由我们的单测自证 —— 这里让 querySelector 自己表态。
       // (2026-08:未掩码的防呆正则曾把前三条拒在 querySelector 之前,是真回归。)
+      // 轴名那几条只放**跨版本稳定**的:`::BEFORE` 的大小写不敏感是规范行为;
+      // `::details-content` 之类新伪元素是否被接受取决于 runner 上的 Chromium 版本,
+      // 不适合当 CI 断言,故只在单测里钉住"我们不拦"(那一侧与浏览器版本无关)。
       const probe = `(() => {
         const sels = [
           'input[value="text()"]',
@@ -269,6 +272,7 @@ return await cdp.click(target, { ref: ${recoveryRef} }, { noFeedback: true });
           'div[data-x=y]',
           'svg text[x="1"]',
           'descendant::before',
+          'descendant::BEFORE',
           'self::part(name)',
           'parent::after'
         ];

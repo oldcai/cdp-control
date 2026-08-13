@@ -43,28 +43,36 @@ const SHAPES: Array<[RegExp, string]> = [
  * 这些判在掩码后的残留串上 —— 引号/注释里的同名字样是数据,不是语法。
  */
 /**
- * CSS 伪元素名(跟在 `::` 后面)。轴规则必须把它们排除掉。
+ * token 判据的共同要求:**在掩码后的语法位置上出现就不可能是合法 CSS**。
+ * 判"这不可能是 CSS"(规则少而稳),而不是判"这看起来像 XPath"(开放集合,永远补不完)。
  *
- * 真浏览器实测(集成用例 ⑨,ubuntu/windows/macOS)给出的分界很干净:
- *   `descendant::before` / `self::part(name)` / `parent::after`  → **parse 通过**,是合法 CSS
- *   `descendant::button` / `self::div`                          → **SyntaxError**,是真 XPath
- * 也就是说"轴名 + 伪元素"合法(页面上可以有名为 descendant 的元素),"轴名 + 元素名"才非法。
- * 光按轴名判会把前者误拒 —— 所以这里按**后面跟的是不是伪元素**来分。
- * `-[\w-]+` 覆盖 `::-webkit-*` 这类厂商前缀。
+ * 为什么这里没有"轴"规则 —— 这是被实测推翻后的刻意删除,别再加回来:
+ *   曾经按 `轴名::` 判 XPath,于是需要一份 CSS 伪元素名单来排除 `descendant::before`。
+ *   真浏览器实测证明这条路走不通,**两侧都是开放集合**:
+ *     `descendant::BEFORE`               → VALID(伪元素名大小写不敏感)
+ *     `descendant::details-content`      → VALID(伪元素随浏览器演进新增)
+ *     `descendant::view-transition-group(x)` → VALID(带参数形态)
+ *     `descendant::-moz-anything`        → Chrome 里 INVALID(厂商前缀还因浏览器而异)
+ *   而另一侧 `descendant::button` / `following-sibling::div` 确实 INVALID。
+ *   也就是说 `X::Y` 到底合不合法**取决于 Y 是不是当前浏览器认识的伪元素** ——
+ *   纯 Node 侧没有 CSS parser,这件事**本质不可判定**。
+ *   继续补名单只会两个方向轮流漏(漏放真 XPath / 误拒合法 CSS),已实测各漏 2 例。
+ *
+ * 取舍(明确记录):裸轴表达式(`following-sibling::button`)不再被诊断为 XPath,
+ * 退化成 querySelector 的通用"只支持 CSS"报错。**退化可接受,误伤不可接受** ——
+ * 误拒合法 CSS 是真实回归,漏诊断只是少一句指路。
+ * 带路径根(`//descendant::button`)、带谓词(`following-sibling::button[1]`)、
+ * 带属性(`descendant::*[@id='x']`)的形态仍被下面的无名单判据覆盖。
  */
-const CSS_PSEUDO_ELEMENT =
-  'before|after|first-line|first-letter|marker|selection|placeholder|backdrop|part|slotted|file-selector-button|cue|cue-region|target-text|spelling-error|grammar-error|highlight|view-transition[\\w-]*|-[\\w-]+';
-
 const DIALECTS: Array<[RegExp, string]> = [
-  // `@attr` 是 XPath 取属性,CSS 里 `@` 只能起 at-rule、绝不出现在 selector 语法位置。
-  // 原先只认 `@class` 是个不一致 —— `div[@id='x']`、`*[@role='button']` 一样常见。
-  // 轴按名字白名单认,并排除伪元素(见 CSS_PSEUDO_ELEMENT);
-  // 更不能写成通用 `\w+::\w+`,那会连 `div::before` 一起吃掉。
   [
-    new RegExp(
-      `\\bcontains\\s*\\(|\\btext\\s*\\(\\s*\\)|@[a-zA-Z_][\\w.-]*|` +
-        `\\b(?:descendant|ancestor|following|preceding|child|parent|self|attribute|namespace)(?:-or-self)?::(?!(?:${CSS_PSEUDO_ELEMENT})\\b)`,
-    ),
+    // `contains(` / `text()`:CSS 没有同名函数。
+    // `@ident`:CSS 里 `@` 只能起 at-rule,绝不出现在 selector 语法位置。
+    // `[N]`:XPath 位置谓词。实测 `div[1]` / `button[1]` / `[1]` 全部 INVALID,
+    //        而 `div[data-x]` / `div:nth-child(1)` VALID —— CSS 属性名不能以数字开头。
+    // `::*`:实测 INVALID(没有 `::*` 这个伪元素)。
+    // 以上四条都**不依赖任何名单**,不会随浏览器演进漂移。
+    /\bcontains\s*\(|\btext\s*\(\s*\)|@[a-zA-Z_][\w.-]*|\[\s*\d+\s*\]|::\*/,
     'XPath',
   ],
   [/:has-text\(|:text\(|>>/i, 'Playwright'],
