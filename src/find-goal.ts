@@ -41,7 +41,7 @@ export function stripInputValues(line: string): string {
     const block = kept !== undefined ? `${head}${head.endsWith('[') ? '' : ' '}placeholder="${kept}"]` : head.endsWith('[') ? head.slice(0, -1) : `${head}]`;
     out = block + out.slice(end + 2);
   }
-  return out.replace(/(\btextarea(?:\[.*?\])?) ~?".*"/, '$1');
+  return out.replace(/(^|> )(textarea(?:\[.*?\])?) ".*"/, '$1$2');
 }
 
 const TRAILING_REF = /\s*\[ref=(\d+)(, visible)?\]\s*$/;

@@ -50,18 +50,21 @@ async function main(): Promise<void> {
   const rows: EvalRow[] = [];
   let tokens = 0;
   let next = 0;
+  let stopped = false;
   await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
-    while (next < goals.length) {
-      if (tokens * COST_PER_TOKEN > BUDGET_USD) throw new Error(`超过预算 $${BUDGET_USD},停止`);
-      const goal = goals[next++];
-      const lines = loadTree(goal.page);
-      const t0 = Date.now();
-      const result = await locateGoal(parseElements(lines), goal.goal, { call, limit: 10 });
-      tokens += result.inputTokens;
-      const gold = goal.gold ? goldRefs(lines, goal.gold) : new Set<number>();
-      const rank = result.candidates.map(c => c.ref);
-      rows.push({ goal, result, rank, hit1: rank.slice(0, 1).some(r => gold.has(r)), hit5: rank.slice(0, 5).some(r => gold.has(r)), ms: Date.now() - t0 });
-    }
+    try {
+      while (!stopped && next < goals.length) {
+        if (tokens * COST_PER_TOKEN > BUDGET_USD) throw new Error(`超过预算 $${BUDGET_USD},停止`);
+        const goal = goals[next++];
+        const lines = loadTree(goal.page);
+        const t0 = Date.now();
+        const result = await locateGoal(parseElements(lines), goal.goal, { call, limit: 10 });
+        tokens += result.inputTokens;
+        const gold = goal.gold ? goldRefs(lines, goal.gold) : new Set<number>();
+        const rank = result.candidates.map(c => c.ref);
+        rows.push({ goal, result, rank, hit1: rank.slice(0, 1).some(r => gold.has(r)), hit5: rank.slice(0, 5).some(r => gold.has(r)), ms: Date.now() - t0 });
+      }
+    } catch (e) { stopped = true; throw e; }
   }));
 
   const pos = rows.filter(r => r.goal.gold);

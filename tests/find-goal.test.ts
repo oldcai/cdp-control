@@ -40,6 +40,8 @@ test('stripInputValues: 值里带引号/方括号时宁可丢 placeholder 也不
 test('stripInputValues: textarea 的值和默认文本都去掉', () => {
   assert.equal(stripInputValues('textarea[value="草稿" placeholder="写点什么"] "草稿" [ref=3]'), 'textarea[placeholder="写点什么"] [ref=3]');
   assert.equal(stripInputValues('form > textarea "默认内容" [ref=3]'), 'form > textarea [ref=3]');
+  assert.equal(stripInputValues('textarea ~"Comment body" [ref=5]'), 'textarea ~"Comment body" [ref=5]');
+  assert.equal(stripInputValues('p "Use the textarea "foo" element to write" [ref=9]'), 'p "Use the textarea "foo" element to write" [ref=9]');
 });
 
 test('stripInputValues: 普通页面文本里的 value= 不动,无 value 的 input 不动', () => {
