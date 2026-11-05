@@ -3,3 +3,4 @@ dist/
 *.err
 tmp/
 reference/
+.env

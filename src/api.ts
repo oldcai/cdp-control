@@ -6,7 +6,7 @@
 import { writeFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import { pageWs, browserWs, send, evalJs, evaluate, resolve, list, sleep, Target } from './transport';
-import { inject, viewExpr, locateExpr, infoExpr, foldExpr, findExpr, articleExpr, readContentExpr } from './inject-loader';
+import { inject, viewExpr, locateExpr, infoExpr, foldExpr, findExpr, articleExpr, readContentExpr, goalTreeExpr } from './inject-loader';
 import { parseKeySpec } from './keys';
 import { maybeSpawnDaemon, injectMonitor } from './monitor';
 import { matchFolds, hostOf, pathOf, loadFolds } from './folds';
@@ -14,6 +14,8 @@ import { loadLinkRules } from './ignore-links';
 import { normArg, type TargetArg } from './target-arg';
 import { diffTabs } from './tab-diff';
 import { ensureBrowser } from './browser';
+import { parseElements, locateGoal, type GoalElement, type GoalResult } from './find-goal';
+import { jevClient, requireJevKey } from './jev';
 
 /**
  * 统一执行注入脚本并解包结果契约:
@@ -178,8 +180,27 @@ export interface FoldOpts {
  * - ancestor:命中后向上爬 N 层到区域容器。all:收集全部命中而非首个。
  * - 返回 {ok, hits:[{ref, tag, text, line}]}(line 是该元素 formatView 的一行输出,含 [ref=N])。 */
 export interface FindOpts { text?: string; selector?: string; ancestor?: number; all?: boolean }
-export async function find(target: Target, opts: FindOpts = {}): Promise<any> {
+export interface FindHit { ref: number; tag: string; text: string; line: string }
+export interface FindGoalOpts { goal: string; limit?: number }
+export async function find(target: Target, opts: FindGoalOpts): Promise<GoalResult>;
+export async function find(target: Target, opts?: FindOpts): Promise<{ ok: true; hits: FindHit[] }>;
+export async function find(target: Target, opts: FindOpts | FindGoalOpts = {}): Promise<GoalResult | { ok: true; hits: FindHit[] }> {
+  if ('goal' in opts) return findGoal(target, opts);
   return invoke(target, findExpr(opts));
+}
+
+/** goalElements:取全页元素清单——这就是 find --goal 发给 Jev 的内容(不外呼,可用来审查要发什么)。
+ * 只追加 ref、复用已登记元素、输入内容不进树,不走整页 view 的清表路径。 */
+export async function goalElements(target: Target): Promise<GoalElement[]> {
+  const ignore = loadLinkRules().map(r => r.pattern);
+  const tree = await invoke<{ lines: string[] }>(target, goalTreeExpr({ ignoreLinks: ignore.length ? ignore : undefined }), 30000);
+  return parseElements(tree.lines);
+}
+
+/** find --goal:按意图定位元素。页面内容发往第三方(Jev)的唯一入口;无 key 在碰页面前就报错。 */
+async function findGoal(target: Target, opts: FindGoalOpts): Promise<GoalResult> {
+  const key = requireJevKey();
+  return locateGoal(await goalElements(target), opts.goal, { call: jevClient({ key }), limit: opts.limit });
 }
 /** 折叠:会话级临时折叠某 ref 区域(注入 __cdpFolds,刷新失效),或 list 列持久+临时规则。
  * 持久规则改为手动编辑 rules/fold.csv,view 读取自动生效(无命令/脚本写入口)。 */
@@ -350,7 +371,7 @@ const coreApi = {
   list: async () => { await ensureBrowser(); return list(); },
   resolve: async (match?: string) => { await ensureBrowser(); return resolve(match); },
   open, close, activate, navigate, eval: evaluate,
-  view, locate, info, article, read, fold, find, fetchPage, click, fill, waitFor, waitForFn, screenshot, focus, getFocus, pressKey, hover,
+  view, locate, info, article, read, fold, find, goalElements, fetchPage, click, fill, waitFor, waitForFn, screenshot, focus, getFocus, pressKey, hover,
 };
 
 export { coreApi };

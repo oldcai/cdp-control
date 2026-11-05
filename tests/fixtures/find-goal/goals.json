@@ -1,0 +1,296 @@
+[
+ {
+  "page": "gh_repo",
+  "goal": "Mark this repository as one of my favourites",
+  "gold": "a ~\"Star ",
+  "kind": "para"
+ },
+ {
+  "page": "gh_repo",
+  "goal": "Report a bug to the maintainers",
+  "gold": "a ~\"Issues",
+  "kind": "para"
+ },
+ {
+  "page": "gh_repo",
+  "goal": "Review code changes proposed by outside contributors",
+  "gold": "a ~\"Pull requests",
+  "kind": "para"
+ },
+ {
+  "page": "gh_repo",
+  "goal": "Get the URL I need to clone this repo",
+  "gold": "button ~\"Code\"",
+  "kind": "para"
+ },
+ {
+  "page": "gh_repo",
+  "goal": "See which versions of this project have shipped",
+  "gold": "a ~\"(Tags \\d|Releases)",
+  "kind": "para"
+ },
+ {
+  "page": "gh_repo",
+  "goal": "Search for a specific file in this repository",
+  "gold": "Go to file",
+  "kind": "para"
+ },
+ {
+  "page": "gh_repo",
+  "goal": "Buy a Playwright t-shirt",
+  "gold": null,
+  "kind": "neg"
+ },
+ {
+  "page": "hn",
+  "goal": "Read the discussion about the first story",
+  "gold": "a \"29 comments\"",
+  "kind": "para"
+ },
+ {
+  "page": "hn",
+  "goal": "Go to the next page of stories",
+  "gold": "a \"More\"",
+  "kind": "para"
+ },
+ {
+  "page": "hn",
+  "goal": "Share a link to a story I found",
+  "gold": "a \"submit\"",
+  "kind": "para"
+ },
+ {
+  "page": "hn",
+  "goal": "Sign into my account",
+  "gold": "a \"login\"",
+  "kind": "para"
+ },
+ {
+  "page": "hn",
+  "goal": "Switch the site to dark mode",
+  "gold": null,
+  "kind": "neg"
+ },
+ {
+  "page": "mdn",
+  "goal": "Stop a MutationObserver from receiving notifications",
+  "gold": "a ~\"disconnect\\(\\)\"",
+  "kind": "para"
+ },
+ {
+  "page": "mdn",
+  "goal": "Check which browsers support this API",
+  "gold": "(Browser compatibility|See full compatibility)",
+  "kind": "lit"
+ },
+ {
+  "page": "mdn",
+  "goal": "Change the language this page is displayed in",
+  "gold": "mdn-language-switcher",
+  "kind": "lit"
+ },
+ {
+  "page": "mdn",
+  "goal": "Switch the site to dark mode",
+  "gold": "mdn-color-theme",
+  "kind": "para"
+ },
+ {
+  "page": "mdn",
+  "goal": "Book a flight to Paris",
+  "gold": null,
+  "kind": "neg"
+ },
+ {
+  "page": "pydoc",
+  "goal": "Run many coroutines at the same time and collect their results",
+  "gold": "(Running Tasks Concurrently|asyncio\\.gather\\(|a ~?\"gather)",
+  "kind": "para"
+ },
+ {
+  "page": "pydoc",
+  "goal": "Cancel an operation if it takes too long",
+  "gold": "(a \"Timeouts\"|asyncio\\.timeout|asyncio\\.wait_for)",
+  "kind": "para"
+ },
+ {
+  "page": "pydoc",
+  "goal": "Protect a task from being cancelled",
+  "gold": "(Shielding From Cancellation|asyncio\\.shield)",
+  "kind": "para"
+ },
+ {
+  "page": "pydoc",
+  "goal": "Tell the maintainers about a mistake in this documentation",
+  "gold": "a \"Report a bug\"",
+  "kind": "para"
+ },
+ {
+  "page": "pydoc",
+  "goal": "Compare prices of laptops",
+  "gold": null,
+  "kind": "neg"
+ },
+ {
+  "page": "wiki_en",
+  "goal": "See who changed this article and when",
+  "gold": "Past revisions",
+  "kind": "para"
+ },
+ {
+  "page": "wiki_en",
+  "goal": "Read about court cases involving web scraping",
+  "gold": "(3 Legal issues|h2 \"Legal issues\")",
+  "kind": "para"
+ },
+ {
+  "page": "wiki_en",
+  "goal": "Learn how websites defend against scrapers",
+  "gold": "(4 Methods to prevent|h2 \"Methods to prevent)",
+  "kind": "para"
+ },
+ {
+  "page": "wiki_en",
+  "goal": "Read this article in another language",
+  "gold": "22 languages",
+  "kind": "para"
+ },
+ {
+  "page": "wiki_en",
+  "goal": "Fix a typo in this article",
+  "gold": "Edit the source code of this page",
+  "kind": "para"
+ },
+ {
+  "page": "wiki_en",
+  "goal": "Order a pizza",
+  "gold": null,
+  "kind": "neg"
+ },
+ {
+  "page": "wiki_zh",
+  "goal": "查看这篇文章的修改记录",
+  "gold": "早前版本",
+  "kind": "para"
+ },
+ {
+  "page": "wiki_zh",
+  "goal": "阅读这篇文章的其他语言版本",
+  "gold": "22种语言",
+  "kind": "lit"
+ },
+ {
+  "page": "wiki_zh",
+  "goal": "在维基百科里查找其他条目",
+  "gold": "搜索(维基百科|\")",
+  "kind": "para"
+ },
+ {
+  "page": "wiki_zh",
+  "goal": "修改文章里的错别字",
+  "gold": "编辑该页面",
+  "kind": "para"
+ },
+ {
+  "page": "wiki_zh",
+  "goal": "买一张火车票",
+  "gold": null,
+  "kind": "neg"
+ },
+ {
+  "page": "juejin",
+  "goal": "查找某个技术话题",
+  "gold": "input\\[type=search",
+  "kind": "para"
+ },
+ {
+  "page": "juejin",
+  "goal": "发布一篇自己的博客",
+  "gold": "(写文章|创作者中心)",
+  "kind": "para"
+ },
+ {
+  "page": "juejin",
+  "goal": "进入我的账号",
+  "gold": "button \"登录",
+  "kind": "para"
+ },
+ {
+  "page": "juejin",
+  "goal": "看大家发的短动态",
+  "gold": "a \"沸点\"",
+  "kind": "para"
+ },
+ {
+  "page": "juejin",
+  "goal": "申请退货退款",
+  "gold": null,
+  "kind": "neg"
+ },
+ {
+  "page": "stripe",
+  "goal": "Talk to a human about an enterprise plan",
+  "gold": "Contact sales",
+  "kind": "para"
+ },
+ {
+  "page": "stripe",
+  "goal": "Find answers to common questions",
+  "gold": "a \"FAQs\"",
+  "kind": "para"
+ },
+ {
+  "page": "stripe",
+  "goal": "Log into my dashboard",
+  "gold": "a \"Sign in\"",
+  "kind": "para"
+ },
+ {
+  "page": "stripe",
+  "goal": "Open a new Stripe account",
+  "gold": "(a \"Start now\"|a \"Get started\")",
+  "kind": "para"
+ },
+ {
+  "page": "stripe",
+  "goal": "Book a hotel room",
+  "gold": null,
+  "kind": "neg"
+ },
+ {
+  "page": "st_jd",
+  "goal": "搜索一件商品",
+  "gold": "(input ~\"搜索\"|button \"搜索\")",
+  "kind": "lit"
+ },
+ {
+  "page": "st_jd",
+  "goal": "进入我的账号",
+  "gold": "(登录|我的京东)",
+  "kind": "para"
+ },
+ {
+  "page": "st_jd",
+  "goal": "写一篇技术博客",
+  "gold": null,
+  "kind": "neg"
+ },
+ {
+  "page": "st_bbc",
+  "goal": "Create a BBC account",
+  "gold": "~\"Register\"",
+  "kind": "para"
+ },
+ {
+  "page": "st_bbc",
+  "goal": "Read the latest football news",
+  "gold": "a \"Sport\"",
+  "kind": "para"
+ },
+ {
+  "page": "st_bbc",
+  "goal": "Check my bank balance",
+  "gold": null,
+  "kind": "neg"
+ }
+]

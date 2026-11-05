@@ -89,3 +89,8 @@ export function foldExpr(args: { ref?: number; ancestor?: number; note?: string;
 export function findExpr(args: { text?: string; selector?: string; ancestor?: number; all?: boolean }): string {
   return inject('find-entry', args);
 }
+
+/** goal-tree:find --goal 的全页紧凑树,只追加 ref、输入内容不进树。注入入口 src/inject/goal-tree.ts。 */
+export function goalTreeExpr(args: { ignoreLinks?: string[] }): string {
+  return inject('goal-tree', args);
+}
