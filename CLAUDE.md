@@ -138,7 +138,7 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 
 ### find --goal(Jev 语义定位)
 **按意图定位**:`find --goal "<意图>"`(CLI)/`cdp.find(t,{goal,limit})` 把页面元素清单发给 TypeSafe Jev,返回候选(ref+树上那行+概率)和有无判断。**这是页面内容发往第三方的唯一入口,只有显式传 goal 才外呼。**
-- **分层**:`inject/goal-tree.ts` 取树 → `find-goal.ts`(纯函数:`parseElements`/`stripInputValues`/`elementsState`/`chunk`/`verdictOf`/`locateGoal`/`formatGoalResult`,`JevCall` 注入)→ `jev.ts`(HTTP、退避、key)。`api.findGoal` 串起来,`api.goalElements` 只取清单不外呼。
+- **分层**:`inject/goal-tree.ts` 取树 → `find-goal.ts`(纯函数:`parseElements`/`stripInputValues`/`elementsState`/`chunk`/`verdictOf`/`locateGoal`/`formatGoalResult`,`JevCall` 注入)→ `jev.ts`(HTTP、退避、key)。`api.ts` 的私有函数 `findGoal` 串起来(对外是 `cdp.find({goal})`),`cdp.goalElements` 只取清单不外呼。
 - **改文案只动 `find-goal-questions.ts`**:问题文案、模型版本(钉 `jev-1.14.0`,不用别名)、分块大小、阈值都在这。
 - **两阶段**:Choice 每题最多 255 选项,按 250 分块海选(同请求带 Noul),第二个请求决赛各块前 3 名;不超过一块不发第二个。选项名 `r<ref>`,criteria 值 null。state 是紧凑行 `r123: a "Issues"`,每行截 160 字符。
 - **判断**:Noul >0.7 有、<0.3 无、中间"不确定",中间带不能当无解。
