@@ -31,7 +31,7 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 
 | 目录 | 内容 | 运行环境 | 编译 |
 |---|---|---|---|
-| `src/*.ts` | Node 侧(CDP/CLI/api/纯函数;`folds.ts` 读写 fold 规则) | Node | 入口 `cdp.ts` bundle → `dist/cdp.js`;其余转译 CJS |
+| `src/*.ts` | Node 侧(CDP/CLI/api/纯函数;`folds.ts` 读写 fold 规则;`jev.ts` 是唯一外呼第三方的模块) | Node | 入口 `cdp.ts` bundle → `dist/cdp.js`;其余转译 CJS |
 | `src/inject/*.ts` | 注入浏览器执行的 JS(入口) | 浏览器(DOM lib) | esbuild bundle 成 IIFE → `dist/inject/` |
 | `src/inject/lib/` | 注入侧共享模块 | 浏览器 | 打进各入口 |
 | `skills/cdp-control/SKILL.md` | agent 用法文档(极薄,只教调 `cdp-control`);`~/.claude/skills/cdp-control` 符号链接指向它 | — | 不动 |
@@ -131,10 +131,27 @@ dist/inject/*.js     注入浏览器页面跑的 JS(esbuild 打包成自包含 I
 - **限制**:仅遍历 light childNodes,shadow 文章不穿透。
 
 ### find
-**按文本/selector 找元素**:`inject/find-entry.ts`(类 uBlock `:has-text()`)登记新 ref,不必整页重 tree。
+**按文本/selector 找元素**:`inject/find-entry.ts`(类 uBlock `:has-text()`)登记新 ref,不必整页重 tree。只有脚本 API `cdp.find`(CLI 的 `find` 现在只有 `--goal`,见下节)。
 - **`--text`**:整页 DFS(`childrenOf` 穿透 shadow + `ownElText` 取**自身直接文本**)搜关键词,深度上限 `MAX_DEPTH=14`,命中即止。命中元素追加进 `__cdpRefs`(`{el,parentRef:null}`),`buildView(el,{viewport:true})` 取根行标 ref。
 - **`--ancestor`** 爬父;**`--all`** 收集全部。
 - **Args**:`FindCmdArgs{text?,selector?,ancestor?,all?}`。
+
+### find --goal(Jev 语义定位)
+**按意图定位**:`find --goal "<意图>"`(CLI)/`cdp.find(t,{goal,limit})` 把页面元素清单发给 TypeSafe Jev,返回候选(ref+树上那行+概率)和有无判断。**这是页面内容发往第三方的唯一入口,只有显式传 goal 才外呼。**
+- **分层**:`inject/goal-tree.ts` 取树 → `find-goal.ts`(纯函数:`parseElements`/`stripInputValues`/`elementsState`/`chunk`/`verdictOf`/`locateGoal`/`formatGoalResult`,`JevCall` 注入)→ `jev.ts`(HTTP、退避、key)。`api.findGoal` 串起来,`api.goalElements` 只取清单不外呼。
+- **改文案只动 `find-goal-questions.ts`**:问题文案、模型版本(钉 `jev-1.14.0`,不用别名)、分块大小、阈值都在这。
+- **两阶段**:Choice 每题最多 255 选项,按 250 分块海选(同请求带 Noul),第二个请求决赛各块前 3 名;不超过一块不发第二个。选项名 `r<ref>`,criteria 值 null。state 是紧凑行 `r123: a "Issues"`,每行截 160 字符。
+- **判断**:Noul >0.7 有、<0.3 无、中间"不确定",中间带不能当无解。
+- **不变量**:
+  1. **不让既有 ref 失效**:goal-tree 绝不走整页 view 的清表路径,`buildView` 的 `reuseRefs` 让已登记元素复用原 ref(`probe.refIndex` 只读),新元素才追加。重复调用表不增长。
+  2. **输入内容不出页面**:`buildView` 的 `redactInputs` 不采 value、textarea 文本、contenteditable/`role=textbox|searchbox` 子树;`stripInputValues` 是 Node 侧兜底(行级解析在值含引号时有歧义,故真正的边界在注入侧)。
+  3. **失败是错误**:网络错误、4xx/5xx、429/529 重试耗尽(`retry-after` 有限退避,要求等超 30s 直接报错)、响应缺字段、树为空都抛错,绝不变成"无"。
+  4. **key**:`JEV_API_KEY` 环境变量 → `~/.cdp-control/.env`,只在该路径读,不进日志和错误信息。CLI 在碰浏览器前先查。
+  5. **ref 只认行尾**:页面文本里伪造的 `[ref=N]` 不算;行内空白压平,防止换行伪造新行。
+  6. **候选是不可信页面文本**:输出和 SKILL.md 都要声明。
+- **不折叠**:`ignoreFolds` 跳过持久和临时折叠,按意图找元素要看全页。**懒加载**:与整页 view 共用 `lib/scroll-load.ts` 和 `__cdpFullViewDone`,否则首屏外的元素会被误判成没有。
+- **已知限制**:`input[type=submit]` 的按钮文字也在 value 里,一并去掉了;state 超过 Jev 上下文(每题 32k token)时报错,不自动分片。同一请求多次调用概率会有波动(实测模型输出非确定)。
+- **评测**:`JEV_API_KEY=… node --experimental-strip-types scripts/eval-find-goal.ts`(花真钱,不进 `npm test`)。数据在 `tests/fixtures/find-goal/`,目标和标注是作者自写。
 
 ### feedback
 **变更感知**:`feedback-start/collect` 分两次 eval 协作,observer 存全局 `__cdpFeedback`。`startFeedback()` 装 MutationObserver 记 childList 新增+文本变化(前后值);`collectFeedback()` 断开后取**顶层新增元素**逐块 `buildView`,返回 `{blocks, changes}`。
@@ -158,6 +175,7 @@ Node 侧统一 `invoke(target, expr)` 执行注入脚本并解包:成功返回�
 ## 测试
 
 - `tests/*.test.ts` 用 Node 内置 `node:test`+`node:assert/strict`,零运行时依赖。
+- `find --goal`:`find-goal.ts`、`jev.ts` 用注入的 fake call/fetch,单测不访问真实 API;`find-goal-fixtures.test.ts` 离线校验评测数据;`jev.test.ts` 静态守外呼边界(只有 `jev.ts` 知道接口地址,只有 `api.ts` 构造客户端)。goal-tree 的 ref 复用和输入脱敏依赖真实 DOM,靠浏览器实测。
 - 纯函数单测:`view-utils.ts`、`view-format.ts`(formatView/markText)、`genSel.ts`、`find-root.ts`(refElement/climbAncestors/classifyRef)、`folds.ts`(parseRules/domainMatch/pathMatch/matchFolds/loadFolds,临时 CDP_FOLD_FILE)、`ignore-links.ts`(hrefForMatch/globToRegExp/linkRuleMatch/parseLinkRules + 浏览器侧 linkIgnored)、`target-arg.ts`(normArg 防呆)、`keys.ts`(parseKeySpec)、`transport.ts`(resolveTarget)、`port.ts`(portFree/findFreePort,真实 bind 高位端口不 mock)。
 - 注入侧 DOM 相关(buildView/fold/inputInfo、find-entry 穿透 shadow、feedback observer/子树黑名单、recoverRef live 分支)依赖真实 DOM,靠浏览器实测(见 SKILL.md),不写单测。纯函数分支(`formatView` 的 `·屏`/shadow 占位/fold 优先/`inputAttr`、`feedback` 的 `foldTimestampRun`)有单测。
 
