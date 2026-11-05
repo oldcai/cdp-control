@@ -33,6 +33,9 @@ export interface LocateArgs { ref: number; ancestor?: number }
  * ancestor 命中后爬父到容器;all 返回全部命中而非首个。 */
 export interface FindCmdArgs { text?: string; selector?: string; ancestor?: number; all?: boolean }
 
+/** goal-tree:find --goal 取全页紧凑树(只追加 ref、输入内容不进树)。ignoreLinks 同 view。 */
+export interface GoalTreeArgs { ignoreLinks?: string[] }
+
 /** info:列目标元素(爬 ancestor 后)从 html 到自身的祖先链,每层紧凑显示 tag/id/class/语义 data-* /aria/role。
  * 供 agent 挑稳定锚点自己写 fold add 这种 uBlock 式短规则(如 #biliMainHeader)。 */
 export interface InfoArgs { ref: number; ancestor?: number }

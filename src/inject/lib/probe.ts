@@ -8,7 +8,7 @@
  *
  * 与抽取/呈现分层一致:探针是**浏览器侧 DOM 读**,归一化/呈现仍归 Node 侧 `_lib.js`。
  */
-import { findRoot } from './find-root.ts';
+import { findRoot, entryEl, type RefEntry } from './find-root.ts';
 
 /** 元素 → 已建树 ref(未建树 → null,绝不注册)。 */
 export function refOf(el: Element | null | undefined): number | null {
@@ -20,6 +20,17 @@ export function refOf(el: Element | null | undefined): number | null {
     if (e === el) return i;
   }
   return null;
+}
+
+/** 已登记元素 → ref 的索引(同一元素多次登记取最小号,与 refOf 一致)。只读。 */
+export function refIndex(): Map<Element, number> {
+  const refs = (globalThis as unknown as { __cdpRefs?: RefEntry[] }).__cdpRefs ?? [];
+  const index = new Map<Element, number>();
+  refs.forEach((entry, i) => {
+    const el = entryEl(entry);
+    if (el && !index.has(el)) index.set(el, i);
+  });
+  return index;
 }
 
 /** 按 selector 查已建树元素的 ref(穿透 shadow)。未命中元素 → {ref:null,el:null};元素在但未建树 → {ref:null,el}。 */

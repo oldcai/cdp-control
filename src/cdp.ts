@@ -11,6 +11,8 @@ import { logs, cmdListen } from './monitor';
 import { ensureBrowser, killBrowser } from './browser';
 import { runScript } from './run-script';
 import { runRecipe } from './recipe-runner';
+import { formatGoalResult, parseLimit } from './find-goal';
+import { requireJevKey } from './jev';
 
 const api: any = { ...coreApi, logs, ensure: ensureBrowser, kill: killBrowser };
 // recipe:暴露给 run 脚本显式取站点摘要(命中返回 {lines},未命中 null)。
@@ -265,6 +267,16 @@ function printInfoChain(r: any): void {
   if (r.targetDepth != null) console.log(`→ 目标在第 ${r.targetDepth} 层`);
   if (r.suggested) console.log(`建议 selector: ${r.suggested}`);
 }
+
+targetCmd('find', '按意图定位元素:把页面元素清单发给第三方 Jev API,返回候选 ref、概率、有没有的判断。敏感页面不要用')
+  .requiredOption('--goal <意图>', '用户想做的事,如 "Report a bug to the maintainers"')
+  .option('--limit <n>', '候选数(默认 5)')
+  .action(async (opts) => {
+    const limit = parseLimit(opts.limit);
+    if (!opts.goal.trim()) throw new Error('--goal 不能为空');
+    requireJevKey(); // 先于碰浏览器:没 key 不该拉起浏览器
+    console.log(formatGoalResult(await api.find(await needTarget(opts.target), { goal: opts.goal, limit })));
+  });
 
 feedbackOpt(targetOpt(targetCmd('click', '点击元素'))).argument('<target>', 'ref 序号或 selector(全数字=ref)')
   .action(async (t: string, opts: any) => { const arg = normTarget(t, opts.ancestor); const r = await api.click(await needTarget(opts.target), arg, feedbackCfg(opts)); printAction(`已点击: ${argLabel(arg)} (${r.tag})`, r); printFeedback(r.feedback); });

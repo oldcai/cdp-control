@@ -11,8 +11,18 @@ import { tmpFolds } from './fold.ts';
 import type { FoldItem } from './arg.ts';
 import { linkIgnored } from './ignore-links.ts';
 import { cut, isPureCount } from './view-utils.ts';
+import { refIndex } from './probe.ts';
+import type { RefEntry } from './find-root.ts';
 
-export interface ViewBuildOpts { visibleOnly?: boolean; viewport?: boolean; folds?: FoldItem[]; ignoreLinks?: string[]; maxLen?: number }
+export interface ViewBuildOpts {
+  visibleOnly?: boolean; viewport?: boolean; folds?: FoldItem[]; ignoreLinks?: string[]; maxLen?: number;
+  /** 不折叠:连持久规则和会话临时折叠一起忽略(find --goal 要在全页找元素)。 */
+  ignoreFolds?: boolean;
+  /** 已登记的元素复用原 ref,只给新元素追加(find --goal 不让 agent 手里的 ref 失效,也不让表膨胀)。 */
+  reuseRefs?: boolean;
+  /** 输入内容不进树:value、textarea 文本、contenteditable 子树一律不采(树要发往第三方时用)。 */
+  redactInputs?: boolean;
+}
 
 const DROP = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'SVG', 'PATH', 'BR', 'IFRAME', 'PICTURE', 'SOURCE', 'USE']);
 /** 压空白 + 零宽字符、首尾 trim 的归一化(供文本采集/比对统一用)。 */
@@ -90,14 +100,17 @@ function prune(n: ViewNode): boolean {
  * 无文本图标按钮(点赞/分享等)有 aria-label/title 时,view 显示其功能、article 降级标注,而非裸 `button [ref=N]`。
  * data-tooltip 兜底:知乎(B站等)纯图标按钮常把提示放 data-tooltip(如 "解释这篇内容"),无 aria/title 时须借它,
  * 否则 view 只能裸 `button [ref=N]`、agent 看不出含义。 */
-export const elLabel = (el: Element): string => {
-  const aria = el.getAttribute && el.getAttribute('aria-label');
-  if (aria) return aria;
-  const t = el.getAttribute && el.getAttribute('title');
-  if (t) return t;
-  const tip = el.getAttribute && el.getAttribute('data-tooltip');
-  if (tip) return tip;
-  return ownText(el);
+const attrLabel = (el: Element): string =>
+  (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('data-tooltip'))) || '';
+export const elLabel = (el: Element): string => attrLabel(el) || ownText(el);
+
+/** 用户在里面打字的元素(input 没有子节点,内容只在 value,不用走这里)。 */
+const isTextEntry = (el: Element): boolean => {
+  if (el.tagName === 'TEXTAREA') return true;
+  const editable = el.getAttribute('contenteditable');
+  if (editable !== null && editable !== 'false') return true;
+  const role = el.getAttribute('role');
+  return role === 'textbox' || role === 'searchbox';
 };
 
 /** 从 root 建精简树。opts.visibleOnly:建视图后按视口可见裁剪(沿用 view --visible-only 语义);
@@ -111,7 +124,7 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
   const visibleOnly = !!opts.visibleOnly;
   const viewport = !!opts.viewport;
   // 折叠规则来源:持久(Node 侧 folds.ts 按 hostname 过滤后传入)+ 会话级临时(__cdpFolds)。统一按 selector 匹配。
-  const folds: FoldItem[] = [...(opts.folds || []), ...tmpFolds()];
+  const folds: FoldItem[] = opts.ignoreFolds ? [] : [...(opts.folds || []), ...tmpFolds()];
   // 折叠判定:元素命中任一 fold selector → 返回备注,否则 null。
   const foldNote = (el: Element): string | null => {
     for (const f of folds) { try { if (el.matches(f.selector)) return f.note || f.selector; } catch {} }
@@ -199,6 +212,17 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
   // —— 遍一:建树 + 打标记 + 暂存 el。不登记 __cdpRefs ——
   function simplify(el: Element | ShadowRoot, depth: number): ViewNode | null {
     const isEl = el instanceof Element;
+    // redactInputs:打字区只留可操作的壳和静态标签,子树(用户写的内容)不看。
+    if (opts.redactInputs && isEl && isTextEntry(el as Element)) {
+      const e = el as Element;
+      const label = cut(strip(attrLabel(e)), opts.maxLen);
+      return {
+        tag: e.tagName === 'TEXTAREA' ? 'textarea' : 'textbox', isContent: true, text: label, agg: !!label, inter: true,
+        ref: undefined, wantRef: true, el: e, inView: true, view: viewport ? isInViewport(e) : undefined, imgAlt: '',
+        inputInfo: { placeholder: e.getAttribute('placeholder') || e.getAttribute('aria-placeholder') || e.getAttribute('data-placeholder') || undefined },
+        shadow: false, kids: [], size: 1, hasText: false,
+      };
+    }
     // 折叠(非根元素命中 fold 规则):标 wantRef(可展开)、设 fold=备注、不递归子树。
     // 根不折叠:view <ref> 展开折叠容器时,根本身(=该容器)不该再被折叠,否则永远展不开。
     if (isEl && depth > 0) {
@@ -247,7 +271,7 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
       inputInfo: isEl && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')
         ? {
             type: el.tagName === 'INPUT' ? (el.getAttribute('type') || 'text') : undefined,
-            value: cut(((el as any).value || ''), opts.maxLen),
+            value: opts.redactInputs ? undefined : cut(((el as any).value || ''), opts.maxLen),
             placeholder: el.getAttribute('placeholder') || undefined,
           }
         : undefined,
@@ -318,15 +342,18 @@ export function buildView(root: Element | ShadowRoot, opts: ViewBuildOpts = {}):
   }
 
   // —— 遍二:先序 DFS 分配 ref + parentRef。wantRef→设 node.ref 并打印;wantHidden→登记但不打印 ——
+  const known = opts.reuseRefs ? refIndex() : null;
+  const table = (globalThis as unknown as { __cdpRefs: RefEntry[] }).__cdpRefs;
   function assign(n: ViewNode, parentRef: number | null): void {
     let childParent: number | null = parentRef;
+    const existing = n.el ? known?.get(n.el) : undefined;
     if (n.wantRef && n.el) {
-      n.ref = (globalThis as any).__cdpRefs.length;
+      n.ref = existing ?? table.length;
       // 登记表存 {el, parentRef}:parentRef = 最近的已登记祖先 ref 号(跳表),供 ref 失效自愈向上找存活容器。
-      (globalThis as any).__cdpRefs.push({ el: n.el, parentRef });
+      if (existing == null) table.push({ el: n.el, parentRef });
       if (n.ref != null) childParent = n.ref;
-    } else if (n.wantHidden && n.el) {
-      (globalThis as any).__cdpRefs.push({ el: n.el, parentRef });
+    } else if (n.wantHidden && n.el && existing == null) {
+      table.push({ el: n.el, parentRef });
     }
     for (const k of n.kids) assign(k, childParent);
   }
